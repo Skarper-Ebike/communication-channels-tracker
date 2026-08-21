@@ -10,6 +10,7 @@ only after the whole run has processed successfully, and never on --dry-run.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -34,7 +35,8 @@ class RunResult:
 
 
 def run(command: str, *, mock: bool = False, dry_run: bool = False,
-        paths: LocalPaths | None = None, now: datetime | None = None) -> RunResult:
+        no_ai: bool = False, paths: LocalPaths | None = None,
+        now: datetime | None = None) -> RunResult:
     paths = paths or LocalPaths()
     paths.ensure()
     config = load_config(paths)
@@ -42,11 +44,12 @@ def run(command: str, *, mock: bool = False, dry_run: bool = False,
 
     with RunLock(paths.lock_file):
         return _run_locked(command, config, paths, now,
-                           mock=mock, dry_run=dry_run)
+                           mock=mock, dry_run=dry_run, no_ai=no_ai)
 
 
 def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
-                now: datetime, *, mock: bool, dry_run: bool) -> RunResult:
+                now: datetime, *, mock: bool, dry_run: bool,
+                no_ai: bool) -> RunResult:
     started = time.monotonic()
     log.info("run started: command=%s mock=%s dry_run=%s", command, mock, dry_run)
 
@@ -78,6 +81,30 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
     fresh = recent.filter_new(activities)
 
     candidates = rules.evaluate(fresh, now)
+
+    ai_cache = None
+    if not no_ai and config.ai.enabled and _ai_available():
+        from app.ai import analyse
+        from app.ai.client import AnthropicAIClient
+
+        ai_cache = analyse.ClassificationCache(paths)
+        try:
+            ai_client = AnthropicAIClient(model=config.ai.model)
+        except Exception:
+            log.exception("could not construct Anthropic client")
+            ai_client = None
+        if ai_client is not None:
+            ai_result = analyse.run_ai_pass(fresh, ai_client, ai_cache, now)
+            if ai_result.failed:
+                degraded.append("claude")
+            # Deterministic candidates win on key collisions.
+            existing_keys = {c.key for c in candidates}
+            candidates.extend(i for i in ai_result.items
+                              if i.key not in existing_keys)
+            ai_cache.prune(now)
+            log.info("AI pass: %d classified, %d from cache, %d items",
+                     ai_result.classified, ai_result.from_cache,
+                     len(ai_result.items))
 
     store = AttentionStore(paths)
     store.merge(candidates, activities, now)
@@ -116,6 +143,8 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
         recent.mark_seen(fresh, now)
         recent.prune(now)
         recent.save()
+        if ai_cache is not None:
+            ai_cache.save()
         for name, state in new_states.items():
             atomic_write_json(paths.state / f"{name}.json", state)
 
@@ -123,3 +152,8 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
              time.monotonic() - started, len(items), len(degraded))
     return RunResult(text=text, item_count=len(items),
                      reviewed_count=reviewed, degraded=degraded)
+
+
+def _ai_available() -> bool:
+    return bool(os.environ.get("ANTHROPIC_API_KEY")
+                or os.environ.get("ANTHROPIC_AUTH_TOKEN"))

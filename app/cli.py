@@ -10,6 +10,7 @@ import logging
 import sys
 
 from app.config import AppConfig, Identity, load_config, save_config
+from app.env import load_env
 from app.lock import AlreadyRunning
 from app.storage import LocalPaths, read_json
 
@@ -51,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
 
     paths = LocalPaths()
     _setup_logging(paths)
+    load_env(paths)
 
     if args.command == "setup":
         return _cmd_setup(paths)
@@ -84,7 +86,8 @@ def _cmd_pipeline(args: argparse.Namespace, paths: LocalPaths) -> int:
         return 2
 
     try:
-        result = runner.run(command, mock=True, dry_run=dry_run, paths=paths)
+        result = runner.run(command, mock=True, dry_run=dry_run,
+                            no_ai=args.no_ai, paths=paths)
     except AlreadyRunning:
         print("Another run is already in progress; exiting safely.")
         return 0

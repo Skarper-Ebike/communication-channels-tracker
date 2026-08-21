@@ -58,12 +58,18 @@ class SlackOutput(BaseModel):
     webhook_env: str = "WORK_AGENT_SLACK_WEBHOOK"
 
 
+class AIConfig(BaseModel):
+    enabled: bool = True
+    model: str = "claude-opus-5"
+
+
 class AppConfig(BaseModel):
     version: int = CONFIG_VERSION
     identity: Identity = Field(default_factory=Identity)
     slack_output: SlackOutput = Field(default_factory=SlackOutput)
     briefing: BriefingConfig = Field(default_factory=BriefingConfig)
     attention: AttentionConfig = Field(default_factory=AttentionConfig)
+    ai: AIConfig = Field(default_factory=AIConfig)
     # Connector config blocks arrive with the live connectors (Milestone 5+);
     # unknown keys in config.yaml are preserved on disk and ignored here.
     connectors: dict = Field(default_factory=dict)
