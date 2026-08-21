@@ -30,8 +30,8 @@ person; your machine is the application. Everything personal lives in `.local/`
   agent's own output channel, bots, and your own messages are never analysed
 - live **Google Drive/Slides**: incremental changes API + comments/replies
   on Docs/Slides/Sheets, one-shot localhost OAuth, tokens in `.local/secrets/`
-- live **Basecamp**: todos (assignments, due dates, completion), comments,
-  messages via the recordings API, Launchpad OAuth
+- live **Basecamp 2 (BCX)**: your assigned todos (due dates, completion) plus
+  comments/messages/completions via the global events feed, Launchpad OAuth
 - launchd scheduler installer (macOS): weekday morning briefing, hourly
   urgent scan, weekly summary — missed times fire after wake
 
