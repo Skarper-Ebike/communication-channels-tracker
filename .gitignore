@@ -1,0 +1,9 @@
+# Local user data — every clone represents one person; nothing here is shared.
+.local/
+.env
+
+*.log
+__pycache__/
+.pytest_cache/
+.venv/
+*.egg-info/
