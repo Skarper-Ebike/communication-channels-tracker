@@ -42,6 +42,11 @@ def run(command: str, *, mock: bool = False, dry_run: bool = False,
     paths = paths or LocalPaths()
     paths.ensure()
     config = load_config(paths)
+    if mock:
+        # Demo/test runs live in their own state subtree and never deliver,
+        # so fixtures can never pollute real attention state or Slack.
+        paths = LocalPaths(root=paths.root / "mock")
+        paths.ensure()
     now = now or config.now()
 
     with RunLock(paths.lock_file):
@@ -139,7 +144,7 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
         reported = [i.key for i in items if i.score >= threshold]
 
     delivered = None
-    if not dry_run and command in ("briefing", "urgent", "weekly"):
+    if not dry_run and not mock and command in ("briefing", "urgent", "weekly"):
         # Urgent stays quiet unless something actually crossed the threshold.
         if command != "urgent" or reported:
             delivered = _deliver(text, config)

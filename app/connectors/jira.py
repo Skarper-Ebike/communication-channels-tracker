@@ -128,7 +128,9 @@ class JiraConnector:
     def _build_jql(self, cursor: str | None) -> str:
         scope = "assignee = currentUser()"
         if self.config.projects:
-            projects = ", ".join(self.config.projects)
+            # Quoted so both project keys ("CRX") and full project names
+            # ("CRX Phase 1") are valid JQL.
+            projects = ", ".join(f'"{p}"' for p in self.config.projects)
             scope = f"({scope} OR project in ({projects}))"
 
         if cursor is None:

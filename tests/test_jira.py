@@ -153,11 +153,12 @@ def test_projects_widen_scope():
     log = []
     cfg = JiraConnectorConfig(enabled=True,
                               base_url="https://example.atlassian.net",
-                              projects=["ACME", "ATLAS"])
+                              projects=["ACME", "CRX Phase 1"])
     c = connector([[]], config=cfg, requests_log=log)
     c.fetch_changes({})
     [search] = [r for r in log if r.url.path.endswith("/search/jql")]
-    assert "project in (ACME, ATLAS)" in search.url.params["jql"]
+    # Quoted, so full project names with spaces are valid JQL too.
+    assert 'project in ("ACME", "CRX Phase 1")' in search.url.params["jql"]
 
 
 def test_validate_reports_identity():

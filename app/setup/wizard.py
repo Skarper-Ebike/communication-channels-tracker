@@ -85,10 +85,10 @@ def _setup_jira(config: AppConfig, env_updates: dict[str, str]) -> None:
     else:
         print("✗ Jira left disabled (missing URL, email, or token)")
 
-    projects = _ask("Extra Jira projects to watch beyond your own issues, "
-                    "comma-separated (blank for none)")
+    projects = _ask("Extra Jira projects to watch beyond your own issues — "
+                    "keys or full names, comma-separated (blank for none)")
     if projects:
-        jira.projects = [p.strip().upper() for p in projects.split(",") if p.strip()]
+        jira.projects = [p.strip() for p in projects.split(",") if p.strip()]
 
 
 def _setup_slack(config: AppConfig, env_updates: dict[str, str],

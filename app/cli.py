@@ -84,7 +84,7 @@ def _cmd_pipeline(args: argparse.Namespace, paths: LocalPaths) -> int:
         return 2
 
     try:
-        result = runner.run(command, mock=True, dry_run=dry_run,
+        result = runner.run(command, mock=args.mock, dry_run=dry_run,
                             no_ai=args.no_ai, paths=paths)
     except AlreadyRunning:
         print("Another run is already in progress; exiting safely.")
