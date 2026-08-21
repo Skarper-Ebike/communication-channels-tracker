@@ -204,8 +204,8 @@ def _setup_basecamp(config: AppConfig, env_updates: dict[str, str],
 
     print("Basecamp needs an app from\n"
           "  https://launchpad.37signals.com/integrations\n"
-          "with redirect URI http://127.0.0.1:PORT/ allowed — Basecamp\n"
-          "accepts any localhost port if you register http://127.0.0.1/")
+          "registered with EXACTLY this Redirect URI:\n"
+          "  http://127.0.0.1:8484/")
     client_id = _ask("BASECAMP_CLIENT_ID (blank to keep existing)") \
         or os.environ.get("BASECAMP_CLIENT_ID", "")
     client_secret = _ask("BASECAMP_CLIENT_SECRET (blank to keep existing)") \
@@ -223,6 +223,7 @@ def _setup_basecamp(config: AppConfig, env_updates: dict[str, str],
             client_id=client_id, client_secret=client_secret,
             extra_auth_params={"type": "web_server"},
             extra_token_params={"type": "web_server"},
+            callback_port=8484,
         ))
     except OAuthError as exc:
         print(f"✗ Basecamp authentication failed: {exc}")

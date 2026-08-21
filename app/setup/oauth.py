@@ -40,6 +40,9 @@ class OAuthApp:
     extra_auth_params: dict = field(default_factory=dict)
     # Non-standard providers (Basecamp: type=web_server) add token-request params.
     extra_token_params: dict = field(default_factory=dict)
+    # Providers that require an exact registered redirect URI (Basecamp) need
+    # a fixed port; None picks a free one (fine for Google's loopback rule).
+    callback_port: int | None = None
 
 
 def run_local_flow(app: OAuthApp) -> dict:
@@ -67,7 +70,11 @@ def run_local_flow(app: OAuthApp) -> dict:
         def log_message(self, *args):  # quiet
             pass
 
-    server = HTTPServer(("127.0.0.1", 0), Handler)
+    try:
+        server = HTTPServer(("127.0.0.1", app.callback_port or 0), Handler)
+    except OSError as exc:
+        raise OAuthError(
+            f"could not open callback port {app.callback_port}: {exc}")
     server.timeout = CALLBACK_TIMEOUT_SECONDS
     redirect_uri = f"http://127.0.0.1:{server.server_port}/"
 

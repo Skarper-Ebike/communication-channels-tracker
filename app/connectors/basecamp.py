@@ -82,8 +82,7 @@ class BasecampConnector:
         except Exception as exc:
             return ValidationResult(ok=False, detail=str(exc))
         identity = auth.get("identity", {})
-        accounts = [a for a in auth.get("accounts", [])
-                    if a.get("product") == "bc3"]
+        accounts = _basecamp_accounts(auth)
         if not accounts:
             return ValidationResult(ok=False, detail="no Basecamp account "
                                                      "on this login")
@@ -98,9 +97,8 @@ class BasecampConnector:
         state = dict(state)
         account_id = self.config.account_id or state.get("account_id")
         if not account_id:
-            accounts = [a for a in self._get(
-                f"{LAUNCHPAD}/authorization.json").get("accounts", [])
-                if a.get("product") == "bc3"]
+            accounts = _basecamp_accounts(
+                self._get(f"{LAUNCHPAD}/authorization.json"))
             if not accounts:
                 raise RuntimeError("no Basecamp (bc3) account for this login")
             account_id = str(accounts[0]["id"])
@@ -227,6 +225,15 @@ class BasecampConnector:
 
     def execute_action(self, request: ActionRequest) -> ActionResult:
         return ActionResult(ok=False, detail="basecamp write-back is not implemented")
+
+
+def _basecamp_accounts(auth: dict) -> list[dict]:
+    # Match on the API host, not the product label — current Basecamp
+    # versions report different product strings (bc3, bc4, …) but all live
+    # on 3.basecampapi.com.
+    return [a for a in auth.get("accounts", [])
+            if "basecampapi.com" in a.get("href", "")
+            or a.get("product") == "bc3"]
 
 
 class _TextExtractor(HTMLParser):
