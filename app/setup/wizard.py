@@ -68,8 +68,10 @@ def _setup_jira(config: AppConfig, env_updates: dict[str, str]) -> None:
     jira = config.connectors.jira
     base_url = _ask(f"Jira URL [{jira.base_url or 'https://example.atlassian.net'}]") \
         or jira.base_url
-    email = _ask("Jira email") or os.environ.get("JIRA_EMAIL", "")
-    token = _ask("Jira API token (id.atlassian.com/manage-profile/security/api-tokens)")
+    email = _ask("Jira email (blank to keep existing)") \
+        or os.environ.get("JIRA_EMAIL", "")
+    token = _ask("Jira API token from id.atlassian.com/manage-profile/"
+                 "security/api-tokens (blank to keep existing)")
 
     jira.base_url = base_url
     if email:
@@ -133,8 +135,8 @@ def _setup_slack_input(config: AppConfig, env_updates: dict[str, str]) -> None:
         env_updates["SLACK_USER_TOKEN"] = token
         os.environ["SLACK_USER_TOKEN"] = token
 
-    channels = _ask("Channel IDs to monitor, comma-separated (open channel "
-                    "details → About → Channel ID)")
+    channels = _ask("Channel IDs to monitor, comma-separated — open channel "
+                    "details → About → Channel ID (blank to keep existing)")
     if channels:
         config.connectors.slack.channels = [
             c.strip() for c in channels.split(",") if c.strip()]
