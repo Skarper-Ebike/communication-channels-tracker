@@ -200,8 +200,35 @@ def _live_connectors(config: AppConfig, degraded: list[str],
             log.error("jira enabled but JIRA_EMAIL/JIRA_API_TOKEN/base_url "
                       "incomplete")
             degraded.append("jira")
+
+    if config.connectors.slack.enabled:
+        from app.connectors.slack import SlackConnector
+
+        token = os.environ.get("SLACK_USER_TOKEN")
+        if token and config.connectors.slack.channels:
+            connectors.append(SlackConnector(
+                config.connectors.slack, token,
+                output_channel_id=config.slack_output.channel_id, now=now))
+        else:
+            log.error("slack input enabled but SLACK_USER_TOKEN/channels "
+                      "incomplete")
+            degraded.append("slack")
+
+    if config.connectors.google_drive.enabled:
+        from app.connectors.google_drive import GoogleDriveConnector
+
+        connectors.append(GoogleDriveConnector(
+            config.connectors.google_drive, now=now))
+
+    if config.connectors.basecamp.enabled:
+        from app.connectors.basecamp import BasecampConnector
+
+        connectors.append(BasecampConnector(
+            config.connectors.basecamp, now=now))
     return connectors
 
 
 def any_live_connectors(config: AppConfig) -> bool:
-    return config.connectors.jira.enabled
+    c = config.connectors
+    return (c.jira.enabled or c.slack.enabled or c.google_drive.enabled
+            or c.basecamp.enabled)

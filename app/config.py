@@ -69,12 +69,31 @@ class JiraConnectorConfig(BaseModel):
     projects: list[str] = Field(default_factory=list)
 
 
+class SlackConnectorConfig(BaseModel):
+    enabled: bool = False
+    channels: list[str] = Field(default_factory=list)  # channel IDs (C…/G…)
+    direct_messages: bool = False  # explicit opt-in; not implemented yet
+
+
+class GoogleDriveConnectorConfig(BaseModel):
+    enabled: bool = False
+
+
+class BasecampConnectorConfig(BaseModel):
+    enabled: bool = False
+    account_id: str = ""
+
+
 class ConnectorsConfig(BaseModel):
-    # Future connectors (slack input, google_drive, basecamp, confluence)
-    # get typed blocks as they land; unknown keys pass through untouched.
+    # Confluence gets a typed block when it lands; unknown keys pass through.
     model_config = {"extra": "allow"}
 
     jira: JiraConnectorConfig = Field(default_factory=JiraConnectorConfig)
+    slack: SlackConnectorConfig = Field(default_factory=SlackConnectorConfig)
+    google_drive: GoogleDriveConnectorConfig = Field(
+        default_factory=GoogleDriveConnectorConfig)
+    basecamp: BasecampConnectorConfig = Field(
+        default_factory=BasecampConnectorConfig)
 
 
 class AppConfig(BaseModel):
