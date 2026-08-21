@@ -95,6 +95,12 @@ def _cmd_pipeline(args: argparse.Namespace, paths: LocalPaths) -> int:
     print(result.text)
     if dry_run:
         print("\n(dry run — no state written, nothing sent)")
+    elif result.delivered is True:
+        print("\n✓ Posted to your Slack channel.")
+    elif result.delivered is False:
+        print("\n⚠️ Slack delivery failed — briefing shown above only. "
+              "Run: uv run python -m app.cli doctor")
+        return 1
     return 0
 
 

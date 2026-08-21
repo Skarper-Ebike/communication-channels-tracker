@@ -32,6 +32,8 @@ class RunResult:
     item_count: int = 0
     reviewed_count: int = 0
     degraded: list[str] = field(default_factory=list)
+    # None: sending not attempted (dry run, no webhook, nothing urgent).
+    delivered: bool | None = None
 
 
 def run(command: str, *, mock: bool = False, dry_run: bool = False,
@@ -137,6 +139,12 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
         )
         reported = [i.key for i in items if i.score >= threshold]
 
+    delivered = None
+    if not dry_run and command in ("briefing", "urgent", "weekly"):
+        # Urgent stays quiet unless something actually crossed the threshold.
+        if command != "urgent" or reported:
+            delivered = _deliver(text, config)
+
     if not dry_run:
         store.mark_reported(reported, now)
         store.save()
@@ -151,7 +159,21 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
     log.info("run finished in %.2fs: %d items, %d degraded",
              time.monotonic() - started, len(items), len(degraded))
     return RunResult(text=text, item_count=len(items),
-                     reviewed_count=reviewed, degraded=degraded)
+                     reviewed_count=reviewed, degraded=degraded,
+                     delivered=delivered)
+
+
+def _deliver(text: str, config: AppConfig) -> bool | None:
+    from app.output import slack
+
+    if slack.webhook_url(config) is None:
+        return None
+    try:
+        slack.post_message(text, config)
+    except slack.SlackDeliveryError as exc:
+        log.error("%s", exc)
+        return False
+    return True
 
 
 def _ai_available() -> bool:
