@@ -40,6 +40,17 @@ def get_with_retry(client: httpx.Client, url: str,
     raise TransientAPIError(last_error)
 
 
+class HeaderClient:
+    """Client wrapper adding per-request headers (e.g. a fresh OAuth token)."""
+
+    def __init__(self, client: httpx.Client, headers: dict):
+        self._client = client
+        self._headers = headers
+
+    def get(self, url, params=None):
+        return self._client.get(url, params=params, headers=self._headers)
+
+
 def _backoff_seconds(response: httpx.Response | None, attempt: int) -> float:
     if response is not None:
         retry_after = response.headers.get("Retry-After")

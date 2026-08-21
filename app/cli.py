@@ -145,6 +145,39 @@ def _cmd_doctor(paths: LocalPaths) -> int:
         print(f"– Slack output: not configured "
               f"(set {config.slack_output.webhook_env} via setup)")
 
+    slack_cfg = config.connectors.slack
+    if slack_cfg.enabled:
+        token = os.environ.get("SLACK_USER_TOKEN")
+        if token and slack_cfg.channels:
+            from app.connectors.slack import SlackConnector
+            result = SlackConnector(slack_cfg, token).validate()
+            check(f"Slack input {result.detail}" if result.ok
+                  else f"Slack input: {result.detail}", result.ok,
+                  "uv run python -m app.cli reconnect slack")
+        else:
+            check("Slack input token/channels", False,
+                  "uv run python -m app.cli reconnect slack")
+    else:
+        print("– Slack input: not configured")
+
+    if config.connectors.google_drive.enabled:
+        from app.connectors.google_drive import GoogleDriveConnector
+        result = GoogleDriveConnector(config.connectors.google_drive).validate()
+        check(f"Google {result.detail}" if result.ok
+              else f"Google: {result.detail}", result.ok,
+              "uv run python -m app.cli reconnect google")
+    else:
+        print("– Google Drive: not configured")
+
+    if config.connectors.basecamp.enabled:
+        from app.connectors.basecamp import BasecampConnector
+        result = BasecampConnector(config.connectors.basecamp).validate()
+        check(f"Basecamp {result.detail}" if result.ok
+              else f"Basecamp: {result.detail}", result.ok,
+              "uv run python -m app.cli reconnect basecamp")
+    else:
+        print("– Basecamp: not configured")
+
     if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
         check("Claude reachable", _claude_reachable(config),
               "check ANTHROPIC_API_KEY in .local/.env")
@@ -159,8 +192,7 @@ def _cmd_doctor(paths: LocalPaths) -> int:
         print("– scheduler: not installed "
               "(uv run python -m app.cli install-scheduler)")
 
-    for name in ("Slack input", "Google Drive", "Basecamp", "Confluence"):
-        print(f"– {name}: arrives in a later milestone")
+    print("– Confluence: arrives in a later milestone")
 
     print("\nReady." if ok else "\nFix the items above, then re-run doctor.")
     return 0 if ok else 1
@@ -176,20 +208,28 @@ def _claude_reachable(config: AppConfig) -> bool:
 
 
 def _cmd_reconnect(service: str, paths: LocalPaths) -> int:
-    if service != "jira":
-        print(f"'{service}' has no connector yet. Available: jira")
+    from app.setup import wizard
+
+    handlers = {
+        "jira": lambda cfg, env: wizard._setup_jira(cfg, env),
+        "slack": lambda cfg, env: wizard._setup_slack_input(cfg, env),
+        "google": lambda cfg, env: wizard._setup_google(cfg, env, paths),
+        "basecamp": lambda cfg, env: wizard._setup_basecamp(cfg, env, paths),
+    }
+    if service not in handlers:
+        print(f"'{service}' has no connector. Available: "
+              + ", ".join(sorted(handlers)))
         return 2
     if not sys.stdin.isatty():
         print("reconnect is interactive; run it from a terminal.")
         return 1
-    from app.setup.wizard import _setup_jira, update_env
 
     config = load_config(paths)
     env_updates: dict[str, str] = {}
-    _setup_jira(config, env_updates)
+    handlers[service](config, env_updates)
     save_config(paths, config)
     if env_updates:
-        update_env(paths, env_updates)
+        wizard.update_env(paths, env_updates)
     return 0
 
 

@@ -37,6 +37,15 @@ def run_setup(paths: LocalPaths) -> int:
     if _yes("Configure Slack output (private channel webhook)? [Y/n]"):
         _setup_slack(config, env_updates, paths)
 
+    if _yes("Configure Slack input (monitor selected channels)? [Y/n]"):
+        _setup_slack_input(config, env_updates)
+
+    if _yes("Configure Google Drive/Slides? [Y/n]"):
+        _setup_google(config, env_updates, paths)
+
+    if _yes("Configure Basecamp? [Y/n]"):
+        _setup_basecamp(config, env_updates, paths)
+
     if _yes("Configure Claude (Anthropic API key for classification)? [Y/n]"):
         key = _ask("ANTHROPIC_API_KEY (leave blank to keep existing/env)")
         if key:
@@ -110,6 +119,117 @@ def _setup_slack(config: AppConfig, env_updates: dict[str, str],
             print("✓ Test message sent")
         except slack.SlackDeliveryError as exc:
             print(f"✗ {exc}")
+
+
+def _setup_slack_input(config: AppConfig, env_updates: dict[str, str]) -> None:
+    import os
+
+    print("Slack input needs a user token (xoxp-…) with read scopes.\n"
+          "On your existing Slack app: OAuth & Permissions → User Token Scopes\n"
+          "→ add channels:history, groups:history, users:read → reinstall app\n"
+          "→ copy the User OAuth Token.")
+    token = _ask("SLACK_USER_TOKEN (leave blank to keep existing)")
+    if token:
+        env_updates["SLACK_USER_TOKEN"] = token
+        os.environ["SLACK_USER_TOKEN"] = token
+
+    channels = _ask("Channel IDs to monitor, comma-separated (open channel "
+                    "details → About → Channel ID)")
+    if channels:
+        config.connectors.slack.channels = [
+            c.strip() for c in channels.split(",") if c.strip()]
+
+    output_id = _ask("Channel ID of your private agent channel (so the agent "
+                     f"never reads its own output) "
+                     f"[{config.slack_output.channel_id or 'unset'}]")
+    if output_id:
+        config.slack_output.channel_id = output_id
+
+    effective = token or os.environ.get("SLACK_USER_TOKEN", "")
+    if effective and config.connectors.slack.channels:
+        from app.connectors.slack import SlackConnector
+
+        result = SlackConnector(config.connectors.slack, effective).validate()
+        print(f"{'✓' if result.ok else '✗'} Slack input {result.detail}")
+        config.connectors.slack.enabled = result.ok
+    else:
+        print("✗ Slack input left disabled (missing token or channels)")
+
+
+def _setup_google(config: AppConfig, env_updates: dict[str, str],
+                  paths: LocalPaths) -> None:
+    import os
+
+    from app.connectors import google_drive
+    from app.setup.oauth import OAuthApp, OAuthError, TokenStore, run_local_flow
+
+    print("Google needs an OAuth client (type: Desktop app) from\n"
+          "  https://console.cloud.google.com/apis/credentials\n"
+          "with the Google Drive API enabled on the project.")
+    client_id = _ask("GOOGLE_CLIENT_ID (blank to keep existing)") \
+        or os.environ.get("GOOGLE_CLIENT_ID", "")
+    client_secret = _ask("GOOGLE_CLIENT_SECRET (blank to keep existing)") \
+        or os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    if not (client_id and client_secret):
+        print("✗ Google left disabled (missing client credentials)")
+        return
+    env_updates["GOOGLE_CLIENT_ID"] = client_id
+    env_updates["GOOGLE_CLIENT_SECRET"] = client_secret
+
+    try:
+        tokens = run_local_flow(OAuthApp(
+            auth_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url=google_drive.TOKEN_URL,
+            client_id=client_id, client_secret=client_secret,
+            scopes=google_drive.SCOPES,
+            extra_auth_params={"access_type": "offline", "prompt": "consent"},
+        ))
+    except OAuthError as exc:
+        print(f"✗ Google authentication failed: {exc}")
+        return
+    TokenStore(paths.secrets / "google-token.json", google_drive.TOKEN_URL,
+               client_id, client_secret).save(tokens)
+    config.connectors.google_drive.enabled = True
+    print("✓ Google connected")
+
+
+def _setup_basecamp(config: AppConfig, env_updates: dict[str, str],
+                    paths: LocalPaths) -> None:
+    import os
+
+    from app.connectors import basecamp
+    from app.setup.oauth import OAuthApp, OAuthError, TokenStore, run_local_flow
+
+    print("Basecamp needs an app from\n"
+          "  https://launchpad.37signals.com/integrations\n"
+          "with redirect URI http://127.0.0.1:PORT/ allowed — Basecamp\n"
+          "accepts any localhost port if you register http://127.0.0.1/")
+    client_id = _ask("BASECAMP_CLIENT_ID (blank to keep existing)") \
+        or os.environ.get("BASECAMP_CLIENT_ID", "")
+    client_secret = _ask("BASECAMP_CLIENT_SECRET (blank to keep existing)") \
+        or os.environ.get("BASECAMP_CLIENT_SECRET", "")
+    if not (client_id and client_secret):
+        print("✗ Basecamp left disabled (missing client credentials)")
+        return
+    env_updates["BASECAMP_CLIENT_ID"] = client_id
+    env_updates["BASECAMP_CLIENT_SECRET"] = client_secret
+
+    try:
+        tokens = run_local_flow(OAuthApp(
+            auth_url=f"{basecamp.LAUNCHPAD}/authorization/new",
+            token_url=basecamp.TOKEN_URL,
+            client_id=client_id, client_secret=client_secret,
+            extra_auth_params={"type": "web_server"},
+            extra_token_params={"type": "web_server"},
+        ))
+    except OAuthError as exc:
+        print(f"✗ Basecamp authentication failed: {exc}")
+        return
+    TokenStore(paths.secrets / "basecamp-token.json", basecamp.TOKEN_URL,
+               client_id, client_secret,
+               extra_refresh_params={"type": "refresh"}).save(tokens)
+    config.connectors.basecamp.enabled = True
+    print("✓ Basecamp connected")
 
 
 def update_env(paths: LocalPaths, updates: dict[str, str]) -> None:

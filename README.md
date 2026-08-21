@@ -25,12 +25,19 @@ person; your machine is the application. Everything personal lives in `.local/`
 - Slack delivery to your private channel via your own incoming webhook
 - live **Jira** connector: assigned/overdue/due-soon work, new assignments,
   comments and mentions, incremental polling by `updated` cursor
+- live **Slack input**: explicitly configured channels only, per-channel
+  cursors, thread replies marked when you contributed to the thread; the
+  agent's own output channel, bots, and your own messages are never analysed
+- live **Google Drive/Slides**: incremental changes API + comments/replies
+  on Docs/Slides/Sheets, one-shot localhost OAuth, tokens in `.local/secrets/`
+- live **Basecamp**: todos (assignments, due dates, completion), comments,
+  messages via the recordings API, Launchpad OAuth
 - launchd scheduler installer (macOS): weekday morning briefing, hourly
   urgent scan, weekly summary — missed times fire after wake
 
-**Not yet implemented** (later milestones): Slack *input* (channel monitoring),
-Google Drive/Slides, Basecamp, Confluence, and command write-back. Commands
-that need them say so.
+**Not yet implemented**: Confluence (Milestone 9, deliberately last) and
+command write-back. Add one connector to your own config at a time and let it
+run for a few days before enabling the next.
 
 ## Setup
 

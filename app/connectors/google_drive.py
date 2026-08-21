@@ -29,7 +29,7 @@ from app.connectors.base import (
     ValidationResult,
 )
 from app.models import Activity, Source
-from app.net import get_with_retry
+from app.net import HeaderClient, get_with_retry
 from app.setup.oauth import TokenStore
 from app.storage import LocalPaths
 
@@ -222,7 +222,7 @@ class GoogleDriveConnector:
             headers = {"Authorization": f"Bearer {self.tokens.access_token()}"}
             try:
                 return get_with_retry(
-                    _HeaderClient(self._client, headers), path, params).json()
+                    HeaderClient(self._client, headers), path, params).json()
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 401 and attempt == 1:
                     self.tokens.refresh()  # stale access token: one refresh
@@ -237,17 +237,6 @@ class GoogleDriveConnector:
 
     def execute_action(self, request: ActionRequest) -> ActionResult:
         return ActionResult(ok=False, detail="drive is read-only by design")
-
-
-class _HeaderClient:
-    """Minimal client wrapper so get_with_retry can add auth headers."""
-
-    def __init__(self, client: httpx.Client, headers: dict):
-        self._client = client
-        self._headers = headers
-
-    def get(self, url, params=None):
-        return self._client.get(url, params=params, headers=self._headers)
 
 
 def _parse_dt(stamp: str | None) -> datetime | None:

@@ -38,6 +38,8 @@ class OAuthApp:
     client_secret: str
     scopes: list[str] = field(default_factory=list)
     extra_auth_params: dict = field(default_factory=dict)
+    # Non-standard providers (Basecamp: type=web_server) add token-request params.
+    extra_token_params: dict = field(default_factory=dict)
 
 
 def run_local_flow(app: OAuthApp) -> dict:
@@ -105,6 +107,7 @@ def exchange_code(app: OAuthApp, code: str, redirect_uri: str) -> dict:
         "redirect_uri": redirect_uri,
         "client_id": app.client_id,
         "client_secret": app.client_secret,
+        **app.extra_token_params,
     }, timeout=30)
     if response.status_code != 200:
         raise OAuthError(f"token exchange failed: HTTP {response.status_code}")
@@ -119,11 +122,13 @@ class TokenStore:
     EXPIRY_SKEW_SECONDS = 60
 
     def __init__(self, path: Path, token_url: str,
-                 client_id: str, client_secret: str):
+                 client_id: str, client_secret: str,
+                 extra_refresh_params: dict | None = None):
         self.path = path
         self.token_url = token_url
         self.client_id = client_id
         self.client_secret = client_secret
+        self.extra_refresh_params = extra_refresh_params or {}
         self._tokens: dict | None = None
 
     def connected(self) -> bool:
@@ -150,6 +155,7 @@ class TokenStore:
             "refresh_token": tokens["refresh_token"],
             "client_id": self.client_id,
             "client_secret": self.client_secret,
+            **self.extra_refresh_params,
         }, timeout=30)
         if response.status_code != 200:
             raise OAuthError(
