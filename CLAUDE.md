@@ -58,11 +58,14 @@ briefing, and exits. The user's machine is the application.
 
 ## Status
 
-Milestones 1–2 done (mock pipeline + attention engine). Next, in order:
-M3 Claude classification → M4 Slack output → M5 Jira → M6 Slack input →
-M7 Google Drive → M8 Basecamp → M9 Confluence. Add one connector at a time
-and let it run for days before the next. Scheduler installer (launchd/systemd)
-ships alongside live connectors.
+Milestones 1–5 done: mock pipeline, attention engine, Claude classification
+(`app/ai/`), Slack webhook delivery (`app/output/slack.py`), live Jira
+connector (`app/connectors/jira.py`), setup wizard (`app/setup/wizard.py`),
+and the macOS launchd scheduler (`app/scheduler.py`). Per the brief, Jira
+should now run for several days before the next connector. Remaining, in
+order: M6 Slack input (must exclude the agent's own channel/output — §36
+self-feedback) → M7 Google Drive/Slides (OAuth) → M8 Basecamp → M9
+Confluence; then command write-back (deterministic parser only).
 
 ## Development
 

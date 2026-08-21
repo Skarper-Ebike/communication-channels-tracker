@@ -63,6 +63,20 @@ class AIConfig(BaseModel):
     model: str = "claude-opus-5"
 
 
+class JiraConnectorConfig(BaseModel):
+    enabled: bool = False
+    base_url: str = ""
+    projects: list[str] = Field(default_factory=list)
+
+
+class ConnectorsConfig(BaseModel):
+    # Future connectors (slack input, google_drive, basecamp, confluence)
+    # get typed blocks as they land; unknown keys pass through untouched.
+    model_config = {"extra": "allow"}
+
+    jira: JiraConnectorConfig = Field(default_factory=JiraConnectorConfig)
+
+
 class AppConfig(BaseModel):
     version: int = CONFIG_VERSION
     identity: Identity = Field(default_factory=Identity)
@@ -70,9 +84,7 @@ class AppConfig(BaseModel):
     briefing: BriefingConfig = Field(default_factory=BriefingConfig)
     attention: AttentionConfig = Field(default_factory=AttentionConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
-    # Connector config blocks arrive with the live connectors (Milestone 5+);
-    # unknown keys in config.yaml are preserved on disk and ignored here.
-    connectors: dict = Field(default_factory=dict)
+    connectors: ConnectorsConfig = Field(default_factory=ConnectorsConfig)
 
     def now(self) -> datetime:
         tz_name = self.identity.timezone

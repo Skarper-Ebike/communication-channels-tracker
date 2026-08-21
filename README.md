@@ -13,22 +13,24 @@ person; your machine is the application. Everything personal lives in `.local/`
 
 ## Current status
 
-**Milestones 1 and 2 are implemented** — the pure-local skeleton and the
-deterministic attention engine, driven by mock fixture data:
+**Milestones 1–5 are implemented:**
 
-- atomic JSON state under `.local/` (no database, crash-safe writes)
-- single-run file locking
-- normalised `Activity` model and connector protocol
-- `MockConnector` with realistic fixtures
-- deterministic rules: overdue, due soon, direct mention, new assignment, new reply
-- deduplication with a bounded, pruned recent-event set
-- ranking, open/snoozed/resolved lifecycle, resolved-history pruning
-- morning / urgent / weekly renderers
-- comprehensive tests
+- pure-local skeleton: atomic JSON state under `.local/`, single-run locking,
+  normalised `Activity` model, connector protocol, mock fixtures
+- attention engine: deterministic rules (overdue, due soon, direct mention,
+  new assignment, new reply), dedup, ranking, open/snoozed/resolved lifecycle
+- Claude classification (Anthropic API, strict structured output, local
+  30-day classification cache, injection-hardened prompt; skipped gracefully
+  when no `ANTHROPIC_API_KEY` is set or `--no-ai` is passed)
+- Slack delivery to your private channel via your own incoming webhook
+- live **Jira** connector: assigned/overdue/due-soon work, new assignments,
+  comments and mentions, incremental polling by `updated` cursor
+- launchd scheduler installer (macOS): weekday morning briefing, hourly
+  urgent scan, weekly summary — missed times fire after wake
 
-**Not yet implemented** (later milestones): Claude classification, Slack
-delivery, live Jira/Slack/Google Drive/Basecamp/Confluence connectors, OAuth,
-and the launchd/systemd scheduler installer. Commands that need them say so.
+**Not yet implemented** (later milestones): Slack *input* (channel monitoring),
+Google Drive/Slides, Basecamp, Confluence, and command write-back. Commands
+that need them say so.
 
 ## Setup
 
@@ -45,6 +47,14 @@ uv run python -m app.cli setup
 uv run python -m app.cli doctor
 
 uv run python -m app.cli briefing --mock
+```
+
+Setup asks for your name/timezone, then optionally connects Jira (URL, email,
+API token), your private Slack channel webhook, and your Anthropic API key.
+Secrets go to `.local/.env` with owner-only permissions. Finish with:
+
+```bash
+uv run python -m app.cli install-scheduler
 ```
 
 ## Commands

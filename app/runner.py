@@ -55,15 +55,14 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
     started = time.monotonic()
     log.info("run started: command=%s mock=%s dry_run=%s", command, mock, dry_run)
 
-    if mock:
-        connectors = [MockConnector(now=now)]
-    else:
-        # Live connectors arrive in Milestones 5+.
-        connectors = []
-
     activities = []
     new_states: dict[str, dict] = {}
     degraded: list[str] = []
+
+    if mock:
+        connectors = [MockConnector(now=now)]
+    else:
+        connectors = _live_connectors(config, degraded, now)
     for connector in connectors:
         state_path = paths.state / f"{connector.name}.json"
         state = read_json(state_path, {"version": 1})
@@ -179,3 +178,25 @@ def _deliver(text: str, config: AppConfig) -> bool | None:
 def _ai_available() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY")
                 or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+
+
+def _live_connectors(config: AppConfig, degraded: list[str],
+                     now: datetime) -> list:
+    connectors = []
+    if config.connectors.jira.enabled:
+        from app.connectors.jira import JiraConnector
+
+        email = os.environ.get("JIRA_EMAIL")
+        token = os.environ.get("JIRA_API_TOKEN")
+        if email and token and config.connectors.jira.base_url:
+            connectors.append(
+                JiraConnector(config.connectors.jira, email, token, now=now))
+        else:
+            log.error("jira enabled but JIRA_EMAIL/JIRA_API_TOKEN/base_url "
+                      "incomplete")
+            degraded.append("jira")
+    return connectors
+
+
+def any_live_connectors(config: AppConfig) -> bool:
+    return config.connectors.jira.enabled

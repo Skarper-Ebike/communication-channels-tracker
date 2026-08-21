@@ -9,7 +9,7 @@ import argparse
 import logging
 import sys
 
-from app.config import AppConfig, Identity, load_config, save_config
+from app.config import AppConfig, load_config, save_config
 from app.env import load_env
 from app.lock import AlreadyRunning
 from app.storage import LocalPaths, read_json
@@ -55,20 +55,18 @@ def main(argv: list[str] | None = None) -> int:
     load_env(paths)
 
     if args.command == "setup":
-        return _cmd_setup(paths)
+        from app.setup.wizard import run_setup
+        return run_setup(paths)
     if args.command == "doctor":
         return _cmd_doctor(paths)
     if args.command == "status":
         return _cmd_status(paths)
     if args.command == "reconnect":
-        print(f"'{args.service}' is not connected yet — live connectors arrive "
-              f"in Milestones 5+. Nothing to reconnect.")
-        return 0
-    if args.command in ("install-scheduler", "uninstall-scheduler"):
-        print("Local scheduling (launchd/systemd) ships once live connectors "
-              "exist. For now, run briefings manually:\n"
-              "  uv run python -m app.cli briefing --mock")
-        return 0
+        return _cmd_reconnect(args.service, paths)
+    if args.command == "install-scheduler":
+        return _cmd_scheduler(paths, install=True)
+    if args.command == "uninstall-scheduler":
+        return _cmd_scheduler(paths, install=False)
 
     return _cmd_pipeline(args, paths)
 
@@ -79,9 +77,9 @@ def _cmd_pipeline(args: argparse.Namespace, paths: LocalPaths) -> int:
     command = "briefing" if args.command in ("run", "dry-run") else args.command
     dry_run = args.dry_run or args.command == "dry-run"
 
-    if not args.mock:
-        print("No live connectors are implemented yet (Milestones 5+). "
-              "Use --mock to run against local fixture data:\n"
+    if not args.mock and not runner.any_live_connectors(load_config(paths)):
+        print("No live connectors are enabled yet. Run setup to connect Jira, "
+              "or use --mock for local fixture data:\n"
               f"  uv run python -m app.cli {args.command} --mock")
         return 2
 
@@ -104,35 +102,12 @@ def _cmd_pipeline(args: argparse.Namespace, paths: LocalPaths) -> int:
     return 0
 
 
-def _cmd_setup(paths: LocalPaths) -> int:
-    print("Personal Work Agent Setup\n")
-    if not sys.stdin.isatty():
-        print("Setup is interactive; run it from a terminal.")
-        return 1
-
-    config = load_config(paths) if paths.config_file.exists() else AppConfig()
-
-    name = input(f"Your name [{config.identity.name}]:\n> ").strip()
-    timezone = input(
-        f"Timezone (e.g. Europe/London) [{config.identity.timezone}]:\n> "
-    ).strip()
-    config.identity = Identity(
-        name=name or config.identity.name,
-        timezone=timezone or config.identity.timezone,
-    )
-    save_config(paths, config)
-
-    print("\n✓ Local config written to .local/config.yaml")
-    print("✓ Local state directories created")
-    print("\nConnectors (Jira, Slack, Google Drive, Basecamp) arrive in later")
-    print("milestones. Try the mock pipeline now:")
-    print("  uv run python -m app.cli briefing --mock")
-    return 0
-
-
 def _cmd_doctor(paths: LocalPaths) -> int:
+    import os
+
     print("PERSONAL WORK AGENT\n")
     ok = True
+    config = load_config(paths)
 
     def check(label: str, passed: bool, fix: str = "") -> None:
         nonlocal ok
@@ -147,14 +122,93 @@ def _cmd_doctor(paths: LocalPaths) -> int:
     check("local state directory", paths.state.is_dir(),
           "uv run python -m app.cli setup")
 
-    from app.connectors.mock import MockConnector
-    check("mock fixtures", MockConnector().validate().ok)
+    jira = config.connectors.jira
+    if jira.enabled:
+        email = os.environ.get("JIRA_EMAIL")
+        token = os.environ.get("JIRA_API_TOKEN")
+        if email and token and jira.base_url:
+            from app.connectors.jira import JiraConnector
+            result = JiraConnector(jira, email, token).validate()
+            check(f"Jira {result.detail}" if result.ok
+                  else f"Jira: {result.detail}", result.ok,
+                  "uv run python -m app.cli reconnect jira")
+        else:
+            check("Jira credentials in .local/.env", False,
+                  "uv run python -m app.cli reconnect jira")
+    else:
+        print("– Jira: not configured")
 
-    for name in ("Jira", "Slack", "Google Drive", "Basecamp", "Claude"):
-        print(f"– {name}: not configured (arrives in later milestones)")
+    webhook = os.environ.get(config.slack_output.webhook_env)
+    if webhook:
+        check("Slack webhook configured", True)
+    else:
+        print(f"– Slack output: not configured "
+              f"(set {config.slack_output.webhook_env} via setup)")
+
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+        check("Claude reachable", _claude_reachable(config),
+              "check ANTHROPIC_API_KEY in .local/.env")
+    else:
+        print("– Claude: no API key (briefings run deterministic-only)")
+
+    from app import scheduler
+    jobs = scheduler.installed_jobs()
+    if jobs:
+        check(f"scheduler configured ({', '.join(jobs)})", True)
+    else:
+        print("– scheduler: not installed "
+              "(uv run python -m app.cli install-scheduler)")
+
+    for name in ("Slack input", "Google Drive", "Basecamp", "Confluence"):
+        print(f"– {name}: arrives in a later milestone")
 
     print("\nReady." if ok else "\nFix the items above, then re-run doctor.")
     return 0 if ok else 1
+
+
+def _claude_reachable(config: AppConfig) -> bool:
+    try:
+        import anthropic
+        anthropic.Anthropic().models.retrieve(config.ai.model)
+        return True
+    except Exception:
+        return False
+
+
+def _cmd_reconnect(service: str, paths: LocalPaths) -> int:
+    if service != "jira":
+        print(f"'{service}' has no connector yet. Available: jira")
+        return 2
+    if not sys.stdin.isatty():
+        print("reconnect is interactive; run it from a terminal.")
+        return 1
+    from app.setup.wizard import _setup_jira, update_env
+
+    config = load_config(paths)
+    env_updates: dict[str, str] = {}
+    _setup_jira(config, env_updates)
+    save_config(paths, config)
+    if env_updates:
+        update_env(paths, env_updates)
+    return 0
+
+
+def _cmd_scheduler(paths: LocalPaths, *, install: bool) -> int:
+    from app import scheduler
+
+    config = load_config(paths)
+    try:
+        if install:
+            jobs = scheduler.install(config, log_dir=paths.logs)
+            print("✓ Installed scheduled jobs: " + ", ".join(jobs))
+            print("  They run via launchd; missed times fire after wake.")
+        else:
+            jobs = scheduler.uninstall()
+            print("✓ Removed scheduled jobs: " + (", ".join(jobs) or "none"))
+    except scheduler.SchedulerError as exc:
+        print(f"✗ {exc}")
+        return 1
+    return 0
 
 
 def _cmd_status(paths: LocalPaths) -> int:
