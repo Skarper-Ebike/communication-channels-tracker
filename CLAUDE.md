@@ -65,8 +65,11 @@ OAuth + token store (`app/setup/oauth.py`), setup wizard, and the macOS
 launchd scheduler. Remaining: M9 Confluence (only once the core proves
 useful) and command write-back (deterministic parser only). Slack input's
 self-feedback exclusions (§36) are structural in the connector — keep them
-that way. Connector doc facts (Basecamp recordings endpoint, Launchpad
-OAuth `type=` params) were verified against basecamp/bc3-api docs Aug 2026.
+that way. The Basecamp connector targets **Basecamp 2 (BCX)** — Skarper's
+version — using the global events feed + assigned_todos; endpoint shapes
+and Launchpad OAuth `type=` params verified against basecamp/bcx-api docs
+Aug 2026. Do not "upgrade" it to the bc3 API without checking what the
+company actually runs.
 
 ## Development
 

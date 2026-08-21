@@ -204,7 +204,7 @@ def _setup_basecamp(config: AppConfig, env_updates: dict[str, str],
 
     print("Basecamp needs an app from\n"
           "  https://launchpad.37signals.com/integrations\n"
-          "registered with EXACTLY this Redirect URI:\n"
+          "with product 'Basecamp 2' ticked and EXACTLY this Redirect URI:\n"
           "  http://127.0.0.1:8484/")
     client_id = _ask("BASECAMP_CLIENT_ID (blank to keep existing)") \
         or os.environ.get("BASECAMP_CLIENT_ID", "")

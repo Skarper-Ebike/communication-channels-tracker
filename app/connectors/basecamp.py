@@ -1,17 +1,16 @@
-"""Basecamp 3/4 connector (OAuth, the user's own account).
+"""Basecamp 2 (BCX) connector — the classic API at basecamp.com/{id}/api/v1.
 
-Per §39, structured work first: todos with assignees/due dates drive the
-deterministic rules; comments and messages are text for the AI pass. Polling
-uses the cross-project recordings endpoint (`GET /projects/recordings.json`)
-per type, sorted by updated_at desc, stopping at the local floor — no project
-mirroring.
+Two polls per run, both bounded (§39):
+  1. the user's assigned todos (people/{id}/assigned_todos.json) — the
+     deterministic overdue/due-soon signals;
+  2. the global events feed (events.json?since=…) — comments, messages, and
+     todo completions (which resolve open attention items).
 
 OAuth is Launchpad's non-standard flavour (`type=web_server` / `type=refresh`);
-tokens live in .local/secrets/basecamp-token.json.
+tokens live in .local/secrets/basecamp-token.json. Endpoint shapes verified
+against basecamp/bcx-api docs (events.md, todos.md, people.md).
 
-State:
-  account_id / person_id / person_name   discovered identity
-  last_sync                              floor for the next poll (with overlap)
+State: base_url, person_id, person_name, last_sync.
 """
 
 from __future__ import annotations
@@ -42,8 +41,8 @@ TOKEN_URL = f"{LAUNCHPAD}/authorization/token"
 USER_AGENT = ("Personal Work Agent "
               "(https://github.com/Skarper-Ebike/communication-channels-tracker)")
 
-RECORDING_TYPES = ("Todo", "Comment", "Message")
-MAX_PAGES_PER_TYPE = 5
+EVENTS_PAGE_SIZE = 50
+MAX_EVENT_PAGES = 5
 INITIAL_LOOKBACK_DAYS = 7
 CURSOR_OVERLAP_MINUTES = 5
 
@@ -82,10 +81,9 @@ class BasecampConnector:
         except Exception as exc:
             return ValidationResult(ok=False, detail=str(exc))
         identity = auth.get("identity", {})
-        accounts = _basecamp_accounts(auth)
-        if not accounts:
-            return ValidationResult(ok=False, detail="no Basecamp account "
-                                                     "on this login")
+        if not _bcx_accounts(auth):
+            return ValidationResult(
+                ok=False, detail="no Basecamp 2 account on this login")
         return ValidationResult(
             ok=True,
             detail=f"authenticated as {identity.get('email_address', 'unknown')}")
@@ -95,104 +93,137 @@ class BasecampConnector:
 
     def fetch_changes(self, state: dict) -> SyncResult:
         state = dict(state)
-        account_id = self.config.account_id or state.get("account_id")
-        if not account_id:
-            accounts = _basecamp_accounts(
-                self._get(f"{LAUNCHPAD}/authorization.json"))
-            if not accounts:
-                raise RuntimeError("no Basecamp (bc3) account for this login")
-            account_id = str(accounts[0]["id"])
-        base = f"https://3.basecampapi.com/{account_id}"
+        base = state.get("base_url") or self._discover_base()
 
         if not state.get("person_id"):
-            me = self._get(f"{base}/my/profile.json")
+            me = self._get(f"{base}/people/me.json")
             state["person_id"] = me["id"]
             state["person_name"] = me.get("name", "")
         self.person_id = state["person_id"]
         self.person_name = state.get("person_name", "")
 
-        floor = self._floor(state.get("last_sync"))
         activities: list[Activity] = []
-        max_updated: str | None = state.get("last_sync")
-        for rtype in RECORDING_TYPES:
-            for recording in self._recordings(base, rtype, floor):
-                updated = recording.get("updated_at", "")
-                if max_updated is None or updated > max_updated:
-                    max_updated = updated
-                activity = self._normalize(rtype, recording)
-                if activity is not None:
-                    activities.append(activity)
+        for todo in self._assigned_todos(base):
+            activities.append(self._todo_activity(todo))
 
-        state["account_id"] = account_id
-        if max_updated is not None:
-            state["last_sync"] = max_updated
+        floor = self._floor(state.get("last_sync"))
+        max_created: str | None = state.get("last_sync")
+        for event in self._events(base, floor):
+            created = event.get("created_at", "")
+            if max_created is None or created > max_created:
+                max_created = created
+            activity = self._event_activity(event)
+            if activity is not None:
+                activities.append(activity)
+
+        state["base_url"] = base
+        if max_created is not None:
+            state["last_sync"] = max_created
         state["version"] = 1
         return SyncResult(activities=activities, state=state)
 
     # -- internals ---------------------------------------------------------
 
-    def _recordings(self, base: str, rtype: str, floor: datetime):
-        url = f"{base}/projects/recordings.json"
-        params = {"type": rtype, "sort": "updated_at", "direction": "desc"}
-        for _ in range(MAX_PAGES_PER_TYPE):
-            response = self._get_response(url, params)
-            items = response.json()
-            for item in items:
-                updated = _parse_dt(item.get("updated_at"))
-                if updated is not None and updated <= floor:
-                    return  # sorted desc: everything after this is older
-                yield item
-            next_url = response.links.get("next", {}).get("url")
-            if not next_url:
-                return
-            url, params = next_url, None
-        log.warning("basecamp: %s truncated at %d pages", rtype,
-                    MAX_PAGES_PER_TYPE)
+    def _discover_base(self) -> str:
+        if self.config.account_id:
+            return f"https://basecamp.com/{self.config.account_id}/api/v1"
+        accounts = _bcx_accounts(self._get(f"{LAUNCHPAD}/authorization.json"))
+        if not accounts:
+            raise RuntimeError("no Basecamp 2 (bcx) account for this login")
+        return accounts[0]["href"].rstrip("/")
 
-    def _normalize(self, rtype: str, r: dict) -> Activity | None:
-        creator = r.get("creator") or {}
-        title = r.get("title") or r.get("subject") or ""
-        parent_title = (r.get("parent") or {}).get("title", "")
-        common = dict(
+    def _assigned_todos(self, base: str) -> list[dict]:
+        payload = self._get(f"{base}/people/{self.person_id}/assigned_todos.json")
+        # The documented person resource only shows the wrapper; in practice
+        # this returns todolists with `assigned_todos` — accept a flat todo
+        # list too, defensively.
+        todos: list[dict] = []
+        items = payload if isinstance(payload, list) else \
+            payload.get("todolists", payload.get("assigned_todos", []))
+        for item in items:
+            if "assigned_todos" in item:
+                todos.extend(item["assigned_todos"])
+            elif "content" in item:
+                todos.append(item)
+        return todos
+
+    def _todo_activity(self, todo: dict) -> Activity:
+        updated = todo.get("updated_at", "")
+        return Activity(
+            id=f"basecamp:todo-{todo.get('id')}:updated:{updated}",
             source=Source.BASECAMP,
-            object_id=str(r.get("id")),
-            url=r.get("app_url", ""),
-            created_at=_parse_dt(r.get("updated_at")) or self.now,
-            actor_id=str(creator.get("id", "")),
-            actor_name=creator.get("name"),
+            object_type="todo",
+            object_id=str(todo.get("id")),
+            event_type="todo_updated",
+            title=todo.get("content", ""),
+            url=todo.get("app_url", ""),
+            created_at=_parse_dt(updated) or self.now,
+            assigned_to_user=True,  # by definition of the endpoint
+            due_at=_parse_due(todo.get("due_at") or todo.get("due_on")),
+            completed=bool(todo.get("completed")),
         )
 
-        if rtype == "Todo":
-            assignees = r.get("assignees") or []
-            assigned = any(a.get("id") == self.person_id for a in assignees)
+    def _events(self, base: str, floor: datetime):
+        # "+" in the since offset must be url-encoded; httpx params handle it.
+        since = floor.isoformat()
+        for page in range(1, MAX_EVENT_PAGES + 1):
+            params = {"since": since}
+            if page > 1:
+                params["page"] = page
+            items = self._get(f"{base}/events.json", params)
+            yield from items
+            if len(items) < EVENTS_PAGE_SIZE:
+                return
+        log.warning("basecamp: events truncated at %d pages", MAX_EVENT_PAGES)
+
+    def _event_activity(self, event: dict) -> Activity | None:
+        creator = event.get("creator") or {}
+        eventable = event.get("eventable") or {}
+        action = event.get("action", "")
+        object_id = str(eventable.get("id", event.get("id")))
+
+        if eventable.get("type") == "Todo" and "completed" in action \
+                and "uncompleted" not in action:
+            # Someone finished a todo: resolves any open attention item on it,
+            # regardless of who completed it.
             return Activity(
-                id=f"basecamp:todo-{r.get('id')}:updated:{r.get('updated_at')}",
+                id=f"basecamp:event-{event.get('id')}",
+                source=Source.BASECAMP,
                 object_type="todo",
-                event_type="todo_updated",
-                title=title or r.get("content", ""),
-                text=_strip_html(r.get("description", "")) or None,
-                assigned_to_user=assigned,
-                due_at=_parse_due(r.get("due_on")),
-                completed=bool(r.get("completed")),
-                **common,
+                object_id=object_id,
+                event_type="todo_completed",
+                actor_id=str(creator.get("id", "")),
+                actor_name=creator.get("name"),
+                title=event.get("target") or event.get("summary", ""),
+                url=event.get("html_url", ""),
+                created_at=_parse_dt(event.get("created_at")) or self.now,
+                completed=True,
             )
 
-        # Comments and Messages by the user are not news to them.
         if creator.get("id") == self.person_id:
-            return None
-        text = _strip_html(r.get("content", ""))
-        mentions = bool(self.person_name) and self.person_name in text
+            return None  # the user's own actions are not news to them
+
+        text = _strip_html(event.get("excerpt")
+                           or event.get("raw_excerpt") or "")
+        is_comment = "comment" in action
+        summary = event.get("summary", "")
+        mentions = bool(self.person_name) and \
+            self.person_name in f"{summary} {text}"
         return Activity(
-            id=f"basecamp:{rtype.lower()}-{r.get('id')}:{r.get('updated_at')}",
-            object_type=rtype.lower(),
-            thread_id=str((r.get("parent") or {}).get("id", "")) or None,
-            event_type=rtype.lower(),
-            title=title or parent_title,
-            text=text,
-            # Name-in-text is the best mention signal Basecamp's HTML gives
-            # us; treat it as a mention, and let the AI pass judge intent.
+            id=f"basecamp:event-{event.get('id')}",
+            source=Source.BASECAMP,
+            object_type=eventable.get("type", "event").lower(),
+            object_id=object_id,
+            event_type="comment" if is_comment else "event",
+            actor_id=str(creator.get("id", "")),
+            actor_name=creator.get("name"),
+            title=event.get("target") or summary,
+            text=text or summary or None,
+            # Name-in-text is the best mention signal BCX gives us; the AI
+            # pass judges actual intent.
             mentions_user=mentions,
-            **common,
+            url=event.get("html_url", ""),
+            created_at=_parse_dt(event.get("created_at")) or self.now,
         )
 
     def _floor(self, last_sync: str | None) -> datetime:
@@ -202,15 +233,12 @@ class BasecampConnector:
                 return parsed - timedelta(minutes=CURSOR_OVERLAP_MINUTES)
         return self.now - timedelta(days=INITIAL_LOOKBACK_DAYS)
 
-    def _get(self, url: str, params: dict | None = None) -> dict | list:
-        return self._get_response(url, params).json()
-
-    def _get_response(self, url: str, params: dict | None = None):
+    def _get(self, url: str, params: dict | None = None):
         for attempt in (1, 2):
             headers = {"Authorization": f"Bearer {self.tokens.access_token()}"}
             try:
                 return get_with_retry(
-                    HeaderClient(self._client, headers), url, params)
+                    HeaderClient(self._client, headers), url, params).json()
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 401 and attempt == 1:
                     self.tokens.refresh()
@@ -227,13 +255,9 @@ class BasecampConnector:
         return ActionResult(ok=False, detail="basecamp write-back is not implemented")
 
 
-def _basecamp_accounts(auth: dict) -> list[dict]:
-    # Match on the API host, not the product label — current Basecamp
-    # versions report different product strings (bc3, bc4, …) but all live
-    # on 3.basecampapi.com.
+def _bcx_accounts(auth: dict) -> list[dict]:
     return [a for a in auth.get("accounts", [])
-            if "basecampapi.com" in a.get("href", "")
-            or a.get("product") == "bc3"]
+            if a.get("product") == "bcx"]
 
 
 class _TextExtractor(HTMLParser):
@@ -269,12 +293,15 @@ def _parse_dt(stamp: str | None) -> datetime | None:
     return parsed
 
 
-def _parse_due(due_on: str | None) -> datetime | None:
-    # due_on is a bare date; due end-of-day, same convention as Jira.
-    if not due_on:
+def _parse_due(due: str | None) -> datetime | None:
+    if not due:
         return None
+    parsed = _parse_dt(due)
+    if parsed is not None and len(due) > 10:
+        return parsed  # due_at carries a real time
     try:
-        return datetime.fromisoformat(due_on).replace(
+        # due_on is a bare date; due end-of-day, same convention as Jira.
+        return datetime.fromisoformat(due[:10]).replace(
             hour=23, minute=59, tzinfo=timezone.utc)
     except ValueError:
         return None

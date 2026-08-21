@@ -7,13 +7,17 @@ from app.connectors.basecamp import BasecampConnector, _strip_html
 
 NOW = datetime(2026, 8, 21, 8, 30, tzinfo=timezone.utc)
 MY_ID = 111
+BASE = "https://basecamp.com/999/api/v1"
 
 AUTHORIZATION = {
     "identity": {"id": 1, "email_address": "jakub@skarper.com"},
-    "accounts": [{"product": "bc3", "id": 999, "name": "Skarper",
-                  "href": "https://3.basecampapi.com/999"}],
+    "accounts": [
+        {"product": "bcx", "id": 999, "name": "Skarper", "href": BASE},
+        {"product": "campfire", "id": 5, "href": "https://x.campfirenow.com"},
+    ],
 }
-PROFILE = {"id": MY_ID, "name": "Jakub Szypicyn"}
+PROFILE = {"id": MY_ID, "name": "Jakub Szypicyn",
+           "email_address": "jakub@skarper.com"}
 
 
 class FakeTokens:
@@ -27,46 +31,40 @@ class FakeTokens:
         return True
 
 
-def todo(rid, *, assignee=MY_ID, due_on="2026-08-19", completed=False,
-         updated="2026-08-21T07:00:00.000Z"):
-    return {
-        "id": rid, "type": "Todo", "updated_at": updated,
-        "title": "Approve homepage design",
-        "content": "Approve homepage design",
-        "description": "<p>Blocked on your sign-off</p>",
-        "assignees": [{"id": assignee, "name": "X"}] if assignee else [],
-        "due_on": due_on, "completed": completed,
-        "app_url": f"https://3.basecamp.com/999/buckets/1/todos/{rid}",
-        "creator": {"id": 222, "name": "James"},
-        "bucket": {"id": 1, "name": "Atlas"},
-        "parent": {"id": 5, "title": "Launch list"},
-    }
+def todo(rid, *, due_on="2026-08-19", completed=False,
+         updated="2026-08-21T07:00:00+00:00"):
+    return {"id": rid, "content": "Approve homepage design",
+            "due_on": due_on, "due_at": None, "completed": completed,
+            "updated_at": updated,
+            "app_url": f"https://basecamp.com/999/projects/1/todos/{rid}"}
 
 
-def comment(rid, *, creator_id=222, creator="James",
-            content="<div>Can Jakub Szypicyn approve this?</div>",
-            updated="2026-08-21T07:30:00.000Z"):
-    return {
-        "id": rid, "type": "Comment", "updated_at": updated,
-        "title": "Re: Homepage design", "content": content,
-        "app_url": f"https://3.basecamp.com/999/buckets/1/comments/{rid}",
-        "creator": {"id": creator_id, "name": creator},
-        "parent": {"id": 5, "title": "Homepage design"},
-    }
+def event(eid, *, action="commented on", etype="Message", creator_id=222,
+          creator="James", excerpt="<div>Can Jakub Szypicyn approve this?</div>",
+          created="2026-08-21T07:30:00+00:00", target="Homepage design"):
+    return {"id": eid, "created_at": created, "action": action,
+            "target": target, "summary": f"{action} {target}",
+            "excerpt": excerpt, "raw_excerpt": excerpt,
+            "creator": {"id": creator_id, "name": creator},
+            "eventable": {"id": eid * 10, "type": etype},
+            "html_url": f"https://basecamp.com/999/projects/1/messages/{eid}"}
 
 
-def make_connector(recordings_by_type, requests_log=None):
+def make_connector(assigned=(), events=(), requests_log=None):
     def handler(request: httpx.Request) -> httpx.Response:
         if requests_log is not None:
             requests_log.append(request)
         path = request.url.path
         if path.endswith("/authorization.json"):
             return httpx.Response(200, json=AUTHORIZATION)
-        if path.endswith("/my/profile.json"):
+        if path.endswith("/people/me.json"):
             return httpx.Response(200, json=PROFILE)
-        if path.endswith("/projects/recordings.json"):
-            rtype = request.url.params["type"]
-            return httpx.Response(200, json=recordings_by_type.get(rtype, []))
+        if path.endswith(f"/people/{MY_ID}/assigned_todos.json"):
+            return httpx.Response(200, json=[
+                {"id": 1, "name": "Launch list",
+                 "assigned_todos": list(assigned)}])
+        if path.endswith("/events.json"):
+            return httpx.Response(200, json=list(events))
         return httpx.Response(404)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
@@ -74,71 +72,67 @@ def make_connector(recordings_by_type, requests_log=None):
                              token_store=FakeTokens(), client=client, now=NOW)
 
 
-def test_discovers_account_and_person_then_normalizes_todo():
-    c = make_connector({"Todo": [todo(9912)]})
+def test_discovers_bcx_account_and_person():
+    c = make_connector()
     result = c.fetch_changes({})
-    assert result.state["account_id"] == "999"
+    assert result.state["base_url"] == BASE
     assert result.state["person_id"] == MY_ID
 
-    [a] = result.activities
-    assert a.source.value == "basecamp"
+
+def test_assigned_todo_is_deterministic_signal():
+    c = make_connector(assigned=[todo(9912)])
+    result = c.fetch_changes({})
+    [a] = [x for x in result.activities if x.object_type == "todo"]
     assert a.assigned_to_user is True
     assert a.due_at.date().isoformat() == "2026-08-19"
     assert a.completed is False
-    assert "sign-off" in a.text
+    assert a.title == "Approve homepage design"
     assert a.url.endswith("/todos/9912")
 
 
-def test_unassigned_todo_not_flagged():
-    c = make_connector({"Todo": [todo(1, assignee=333)]})
-    [a] = c.fetch_changes({}).activities
-    assert a.assigned_to_user is False
-
-
-def test_comment_by_other_with_name_mention():
-    c = make_connector({"Comment": [comment(50)]})
+def test_comment_event_by_other_with_name_mention():
+    c = make_connector(events=[event(50)])
     [a] = c.fetch_changes({}).activities
     assert a.event_type == "comment"
     assert a.actor_name == "James"
     assert a.mentions_user is True
     assert "approve this?" in a.text
-    assert a.title == "Re: Homepage design"
+    assert a.title == "Homepage design"
+    assert a.url.endswith("/messages/50")
 
 
-def test_own_comment_skipped():
-    c = make_connector({"Comment": [comment(51, creator_id=MY_ID,
-                                            creator="Jakub Szypicyn")]})
+def test_own_events_skipped():
+    c = make_connector(events=[event(51, creator_id=MY_ID,
+                                     creator="Jakub Szypicyn")])
     assert c.fetch_changes({}).activities == []
 
 
-def test_recordings_older_than_floor_stop_the_page():
-    old = todo(1, updated="2026-08-01T00:00:00.000Z")  # beyond 7d lookback
-    fresh = todo(2, updated="2026-08-21T07:00:00.000Z")
-    c = make_connector({"Todo": [fresh, old]})
-    result = c.fetch_changes({})
-    assert [a.object_id for a in result.activities] == ["2"]
+def test_todo_completed_event_resolves_even_when_own():
+    done = event(60, action="completed", etype="Todo", creator_id=MY_ID,
+                 creator="Jakub Szypicyn", excerpt="", target="Old task")
+    c = make_connector(events=[done])
+    [a] = c.fetch_changes({}).activities
+    assert a.event_type == "todo_completed"
+    assert a.completed is True
+    assert a.object_id == "600"  # the eventable todo id, not the event id
 
 
-def test_cursor_is_max_updated_at():
-    c = make_connector({
-        "Todo": [todo(1, updated="2026-08-21T07:00:00.000Z")],
-        "Comment": [comment(2, updated="2026-08-21T07:45:00.000Z")],
-    })
-    result = c.fetch_changes({})
-    assert result.state["last_sync"] == "2026-08-21T07:45:00.000Z"
-
-
-def test_incremental_uses_overlapped_floor():
-    state = {"account_id": "999", "person_id": MY_ID,
+def test_cursor_is_max_event_created_at_and_since_has_overlap():
+    log = []
+    c = make_connector(events=[event(1, created="2026-08-21T07:45:00+00:00")],
+                       requests_log=log)
+    state = {"base_url": BASE, "person_id": MY_ID,
              "person_name": "Jakub Szypicyn",
-             "last_sync": "2026-08-21T07:00:00.000Z"}
-    boundary = comment(3, updated="2026-08-21T06:54:00.000Z")  # before overlap
-    c = make_connector({"Comment": [boundary]})
-    assert c.fetch_changes(state).activities == []
+             "last_sync": "2026-08-21T07:00:00+00:00"}
+    result = c.fetch_changes(state)
+    assert result.state["last_sync"] == "2026-08-21T07:45:00+00:00"
+
+    [events_req] = [r for r in log if r.url.path.endswith("/events.json")]
+    assert events_req.url.params["since"] == "2026-08-21T06:55:00+00:00"
 
 
-def test_validate_reports_identity():
-    c = make_connector({})
+def test_validate_requires_bcx_account():
+    c = make_connector()
     result = c.validate()
     assert result.ok and "jakub@skarper.com" in result.detail
 
