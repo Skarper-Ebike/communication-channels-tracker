@@ -138,6 +138,22 @@ def _cmd_doctor(paths: LocalPaths) -> int:
     else:
         print("– Jira: not configured")
 
+    confluence = config.connectors.confluence
+    if confluence.enabled:
+        email = os.environ.get("JIRA_EMAIL")
+        token = os.environ.get("JIRA_API_TOKEN")
+        if email and token and confluence.base_url:
+            from app.connectors.confluence import ConfluenceConnector
+            result = ConfluenceConnector(confluence, email, token).validate()
+            check(f"Confluence {result.detail}" if result.ok
+                  else f"Confluence: {result.detail}", result.ok,
+                  "uv run python -m app.cli reconnect confluence")
+        else:
+            check("Confluence credentials (shared with Jira)", False,
+                  "uv run python -m app.cli reconnect jira")
+    else:
+        print("– Confluence: not configured")
+
     webhook = os.environ.get(config.slack_output.webhook_env)
     if webhook:
         check("Slack webhook configured", True)
@@ -192,7 +208,6 @@ def _cmd_doctor(paths: LocalPaths) -> int:
         print("– scheduler: not installed "
               "(uv run python -m app.cli install-scheduler)")
 
-    print("– Confluence: arrives in a later milestone")
 
     print("\nReady." if ok else "\nFix the items above, then re-run doctor.")
     return 0 if ok else 1
@@ -212,6 +227,7 @@ def _cmd_reconnect(service: str, paths: LocalPaths) -> int:
 
     handlers = {
         "jira": lambda cfg, env: wizard._setup_jira(cfg, env),
+        "confluence": lambda cfg, env: wizard._setup_confluence(cfg),
         "slack": lambda cfg, env: wizard._setup_slack_input(cfg, env),
         "google": lambda cfg, env: wizard._setup_google(cfg, env, paths),
         "basecamp": lambda cfg, env: wizard._setup_basecamp(cfg, env, paths),

@@ -91,11 +91,18 @@ class BasecampConnectorConfig(BaseModel):
     account_id: str = ""
 
 
+class ConfluenceConnectorConfig(BaseModel):
+    enabled: bool = False
+    base_url: str = ""  # the Atlassian site root, e.g. https://org.atlassian.net
+    spaces: list[str] = Field(default_factory=list)  # space keys; empty = all
+
+
 class ConnectorsConfig(BaseModel):
-    # Confluence gets a typed block when it lands; unknown keys pass through.
     model_config = {"extra": "allow"}
 
     jira: JiraConnectorConfig = Field(default_factory=JiraConnectorConfig)
+    confluence: ConfluenceConnectorConfig = Field(
+        default_factory=ConfluenceConnectorConfig)
     slack: SlackConnectorConfig = Field(default_factory=SlackConnectorConfig)
     google_drive: GoogleDriveConnectorConfig = Field(
         default_factory=GoogleDriveConnectorConfig)

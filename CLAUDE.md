@@ -68,8 +68,9 @@ Milestones 1–8 done: mock pipeline, attention engine, Claude classification
 (`app/ai/`), Slack webhook delivery (`app/output/slack.py`), live connectors
 for Jira, Slack input, Google Drive, and Basecamp (`app/connectors/`), local
 OAuth + token store (`app/setup/oauth.py`), setup wizard, and the macOS
-launchd scheduler. Remaining: M9 Confluence (only once the core proves
-useful) and command write-back (deterministic parser only). Slack input's
+launchd scheduler, and the Confluence connector (M9 — CQL polling on the
+same Atlassian credentials as Jira). Remaining: command write-back
+(deterministic parser only). Slack input's
 self-feedback exclusions (§36) are structural in the connector — keep them
 that way. The Basecamp connector targets **Basecamp 2 (BCX)** — Skarper's
 version — using the global events feed + assigned_todos; endpoint shapes

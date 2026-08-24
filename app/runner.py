@@ -238,6 +238,19 @@ def _live_connectors(config: AppConfig, degraded: list[str],
                       "incomplete")
             degraded.append("jira")
 
+    if config.connectors.confluence.enabled:
+        from app.connectors.confluence import ConfluenceConnector
+
+        email = os.environ.get("JIRA_EMAIL")
+        token = os.environ.get("JIRA_API_TOKEN")
+        if email and token and config.connectors.confluence.base_url:
+            connectors.append(ConfluenceConnector(
+                config.connectors.confluence, email, token, now=now))
+        else:
+            log.error("confluence enabled but Atlassian credentials/base_url "
+                      "incomplete")
+            degraded.append("confluence")
+
     if config.connectors.slack.enabled:
         from app.connectors.slack import SlackConnector
 
@@ -267,5 +280,5 @@ def _live_connectors(config: AppConfig, degraded: list[str],
 
 def any_live_connectors(config: AppConfig) -> bool:
     c = config.connectors
-    return (c.jira.enabled or c.slack.enabled or c.google_drive.enabled
-            or c.basecamp.enabled)
+    return (c.jira.enabled or c.confluence.enabled or c.slack.enabled
+            or c.google_drive.enabled or c.basecamp.enabled)

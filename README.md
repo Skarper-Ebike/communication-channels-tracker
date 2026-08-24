@@ -1,8 +1,8 @@
 # Personal Work Agent
 
 A lightweight personal work agent that runs **entirely on your own computer**.
-On a schedule it checks your work systems — Jira, Slack, Google Drive/Slides,
-Basecamp 2 — with **your own credentials**, has Claude judge what actually
+On a schedule it checks your work systems — Jira, Confluence, Slack, Google
+Drive/Slides, Basecamp 2 — with **your own credentials**, has Claude judge what actually
 needs you, and posts one short briefing to **your own private Slack channel**:
 what needs you, what you missed, who's waiting on you, what can be ignored.
 
@@ -68,6 +68,12 @@ Without it, briefings still work with the deterministic signals only.
 
 You'll also be asked for your Jira site URL (`https://<org>.atlassian.net`)
 and optionally extra project keys/names to watch beyond your own issues.
+
+### Confluence — no new credentials
+
+Confluence Cloud lives on the same Atlassian site and accepts the same email
++ API token as Jira. `setup` (or `reconnect confluence`) just asks for the
+site URL and optionally space keys to watch (blank = everything you can see).
 
 ### Slack output — `WORK_AGENT_SLACK_WEBHOOK`
 
@@ -158,7 +164,7 @@ Advice: enable one connector, live with it a few days, then add the next.
 | Command | What it does |
 | --- | --- |
 | `setup` | Interactive setup for identity + all connectors |
-| `reconnect <service>` | Re-do one connector (`jira`, `slack`, `google`, `basecamp`) |
+| `reconnect <service>` | Re-do one connector (`jira`, `confluence`, `slack`, `google`, `basecamp`) |
 | `doctor` | Live health check of every configured piece |
 | `briefing [--mock] [--dry-run] [--no-ai]` | Morning briefing |
 | `urgent` | High-threshold scan (quiet unless something is urgent) |
@@ -203,8 +209,6 @@ Roughly in order:
 
 - **Pilot judgment** — the current gate. Run for two weeks; the success
   test is whether "NEEDS YOU" is low-noise and trusted, not feature count.
-- **Confluence connector** (Milestone 9) — deliberately last, only if the
-  core proves useful.
 - **Command write-back** (phase 2) — typed commands in your agent channel
   (`reply jira ACME-123 …`, `snooze ACME-123 2d`, `ignore …`) parsed
   deterministically, executed with your credentials, logged to

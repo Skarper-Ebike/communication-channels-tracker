@@ -34,6 +34,9 @@ def run_setup(paths: LocalPaths) -> int:
     if _yes(f"Configure Jira? [{'Y/n' if not config.connectors.jira.enabled else 'Y/n, currently on'}]"):
         _setup_jira(config, env_updates)
 
+    if _yes("Configure Confluence (uses your Jira credentials)? [Y/n]"):
+        _setup_confluence(config)
+
     if _yes("Configure Slack output (private channel webhook)? [Y/n]"):
         _setup_slack(config, env_updates, paths)
 
@@ -121,6 +124,34 @@ def _setup_slack(config: AppConfig, env_updates: dict[str, str],
             print("✓ Test message sent")
         except slack.SlackDeliveryError as exc:
             print(f"✗ {exc}")
+
+
+def _setup_confluence(config: AppConfig) -> None:
+    import os
+
+    confluence = config.connectors.confluence
+    default = confluence.base_url or config.connectors.jira.base_url \
+        or "https://example.atlassian.net"
+    base_url = _ask(f"Atlassian site URL [{default}]") or default
+    confluence.base_url = base_url
+
+    spaces = _ask("Space keys to watch, comma-separated (blank = all you "
+                  "can see)")
+    if spaces:
+        confluence.spaces = [s.strip().upper() for s in spaces.split(",")
+                             if s.strip()]
+
+    email = os.environ.get("JIRA_EMAIL", "")
+    token = os.environ.get("JIRA_API_TOKEN", "")
+    if email and token:
+        from app.connectors.confluence import ConfluenceConnector
+
+        result = ConfluenceConnector(confluence, email, token).validate()
+        print(f"{'✓' if result.ok else '✗'} Confluence {result.detail}")
+        confluence.enabled = result.ok
+    else:
+        print("✗ Confluence left disabled — connect Jira first (it shares "
+              "the same Atlassian API token)")
 
 
 def _setup_slack_input(config: AppConfig, env_updates: dict[str, str]) -> None:
