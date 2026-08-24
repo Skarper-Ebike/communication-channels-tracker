@@ -41,6 +41,12 @@ briefing, and exits. The user's machine is the application.
   evolve with migration functions (`app.storage.migrate`), never by asking
   users to hand-edit state.
 
+**Team digest**: the morning briefing summarises the whole day's activity
+(involved or not) via `app/digest.py` — a rolling 48h buffer of truncated
+records that every run appends to and the morning briefing drains. It exists
+because hourly urgent scans consume events as they arrive. Configured under
+`briefing.digest`; disable per-user with `enabled: false`.
+
 ## Where things live
 
 - `app/cli.py` — argparse entrypoint (`uv run python -m app.cli <cmd>`)

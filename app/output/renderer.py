@@ -24,7 +24,9 @@ SOURCE_LABELS = {
 
 def render_morning(items: list[AttentionItem], reviewed_count: int,
                    config: AppConfig, now: datetime,
-                   degraded: list[str] | None = None) -> str:
+                   degraded: list[str] | None = None,
+                   digest=None, digest_counts: dict[str, int] | None = None,
+                   digest_hours: int = 24) -> str:
     ranked = sorted(items, key=lambda i: i.score, reverse=True)
     needs_you = [i for i in ranked if i.score >= NEEDS_YOU_THRESHOLD]
     worth_knowing = [i for i in ranked
@@ -53,6 +55,8 @@ def render_morning(items: list[AttentionItem], reviewed_count: int,
             lines.append(f"• {item.title} — {item.reason}")
             lines.append(f"  → {item.url}")
         lines.append("")
+
+    lines.extend(_digest_lines(digest, digest_counts, digest_hours))
 
     outstanding = _outstanding_lines(ranked, now)
     if outstanding:
@@ -114,6 +118,31 @@ def render_weekly(items: list[AttentionItem], now: datetime) -> str:
     else:
         lines.append("• Nothing with a due date next week.")
     return "\n".join(lines)
+
+
+def _digest_lines(digest, counts: dict[str, int] | None,
+                  hours: int) -> list[str]:
+    if digest is None and not counts:
+        return []
+    lines = [f"🧭 TEAM DIGEST — last {hours}h", ""]
+    if digest is not None:
+        lines.append(digest.overview)
+        for header, entries in (("DECISIONS", digest.decisions),
+                                ("ISSUES", digest.issues),
+                                ("NOTES", digest.notes)):
+            if entries:
+                lines.append("")
+                lines.append(header)
+                lines.extend(f"• {entry}" for entry in entries)
+    else:
+        total = sum(counts.values())
+        sources = ", ".join(
+            f"{n} {SOURCE_LABELS.get(source, source)}"
+            for source, n in sorted(counts.items()))
+        lines.append(f"{total} team activities ({sources}) — "
+                     f"AI summary unavailable.")
+    lines.append("")
+    return lines
 
 
 def _source_line(item: AttentionItem, now: datetime) -> str:

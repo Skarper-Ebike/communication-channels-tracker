@@ -52,6 +52,21 @@ def test_mock_run_never_delivers_to_slack(paths, monkeypatch):
     assert result.delivered is None
 
 
+def test_digest_buffer_survives_sync_and_drains_on_briefing(paths):
+    from app.digest import DigestBuffer
+
+    # An hourly-style sync consumes the events…
+    runner.run("sync", mock=True, paths=paths, now=NOW)
+    isolated = mock_paths(paths)
+    assert DigestBuffer(isolated).entries_since(NOW)
+
+    # …but the morning briefing still digests the whole day, then drains.
+    result = runner.run("briefing", mock=True, paths=paths, now=NOW)
+    assert "🧭 TEAM DIGEST" in result.text
+    assert "team activities" in result.text  # counts fallback (no AI key)
+    assert DigestBuffer(isolated).entries_since(NOW) == []
+
+
 def test_dry_run_writes_nothing(paths):
     result = runner.run("briefing", mock=True, dry_run=True, paths=paths, now=NOW)
     assert "☀️ YOUR MORNING BRIEFING" in result.text

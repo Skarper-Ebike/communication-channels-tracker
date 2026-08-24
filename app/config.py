@@ -42,10 +42,17 @@ class WeeklyBriefing(BaseModel):
     time: str = "15:00"
 
 
+class DigestConfig(BaseModel):
+    enabled: bool = True
+    hours: int = 24
+    max_items: int = 150  # newest records sent to Claude per digest
+
+
 class BriefingConfig(BaseModel):
     morning: MorningBriefing = Field(default_factory=MorningBriefing)
     urgent_scan: UrgentScan = Field(default_factory=UrgentScan)
     weekly: WeeklyBriefing = Field(default_factory=WeeklyBriefing)
+    digest: DigestConfig = Field(default_factory=DigestConfig)
 
 
 class AttentionConfig(BaseModel):

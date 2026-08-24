@@ -37,3 +37,12 @@ class ClassifiedActivity(BaseModel):
 
 class ClassificationResponse(BaseModel):
     items: list[ClassifiedActivity]
+
+
+class DigestResult(BaseModel):
+    """Team-day summary: everything that happened, involved or not."""
+
+    overview: str
+    decisions: list[str]
+    issues: list[str]
+    notes: list[str]

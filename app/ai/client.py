@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import Protocol
 
-from app.ai.schemas import ClassificationResponse
+from app.ai.schemas import ClassificationResponse, DigestResult
 from app.models import Activity
 
 log = logging.getLogger("work-agent")
@@ -20,7 +20,7 @@ log = logging.getLogger("work-agent")
 DEFAULT_MODEL = "claude-opus-5"
 MAX_TEXT_CHARS = 1500
 
-_PROMPT_FILE = Path(__file__).resolve().parent / "prompts" / "classify.md"
+_PROMPTS = Path(__file__).resolve().parent / "prompts"
 
 
 class AIError(Exception):
@@ -29,6 +29,8 @@ class AIError(Exception):
 
 class AIClient(Protocol):
     def classify(self, activities: list[Activity]) -> ClassificationResponse: ...
+
+    def summarise_digest(self, entries: list[dict]) -> DigestResult: ...
 
 
 def activity_payload(a: Activity) -> dict:
@@ -55,7 +57,8 @@ class AnthropicAIClient:
         self._anthropic = anthropic
         self._client = anthropic.Anthropic()
         self.model = model
-        self._system = _PROMPT_FILE.read_text(encoding="utf-8")
+        self._system = (_PROMPTS / "classify.md").read_text(encoding="utf-8")
+        self._digest_system = (_PROMPTS / "digest.md").read_text(encoding="utf-8")
 
     def classify(self, activities: list[Activity]) -> ClassificationResponse:
         payload = [activity_payload(a) for a in activities]
@@ -81,5 +84,31 @@ class AnthropicAIClient:
             raise AIError("no structured output in response")
         log.info("Claude classify: %d activities, %d/%d tokens",
                  len(activities), response.usage.input_tokens,
+                 response.usage.output_tokens)
+        return parsed
+
+    def summarise_digest(self, entries: list[dict]) -> DigestResult:
+        try:
+            response = self._client.messages.parse(
+                model=self.model,
+                max_tokens=4000,
+                system=self._digest_system,
+                messages=[{
+                    "role": "user",
+                    "content": "Summarise this team activity:\n"
+                               + json.dumps(entries, ensure_ascii=False),
+                }],
+                output_format=DigestResult,
+            )
+        except self._anthropic.APIError as exc:
+            raise AIError(f"Anthropic API error: {exc}") from exc
+
+        if response.stop_reason == "refusal":
+            raise AIError("digest request was refused")
+        parsed = response.parsed_output
+        if parsed is None:
+            raise AIError("no structured output in response")
+        log.info("Claude digest: %d entries, %d/%d tokens",
+                 len(entries), response.usage.input_tokens,
                  response.usage.output_tokens)
         return parsed

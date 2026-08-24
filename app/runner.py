@@ -19,6 +19,7 @@ from app.attention import dedupe, ranking, rules
 from app.attention.lifecycle import AttentionStore
 from app.config import AppConfig, load_config
 from app.connectors.mock import MockConnector
+from app.digest import DigestBuffer
 from app.lock import RunLock
 from app.output import renderer
 from app.storage import LocalPaths, atomic_write_json, read_json
@@ -88,6 +89,7 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
 
     candidates = rules.evaluate(fresh, now)
 
+    ai_client = None
     ai_cache = None
     if not no_ai and config.ai.enabled and _ai_available():
         from app.ai import analyse
@@ -98,7 +100,6 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
             ai_client = AnthropicAIClient(model=config.ai.model)
         except Exception:
             log.exception("could not construct Anthropic client")
-            ai_client = None
         if ai_client is not None:
             ai_result = analyse.run_ai_pass(fresh, ai_client, ai_cache, now)
             if ai_result.failed:
@@ -111,6 +112,14 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
             log.info("AI pass: %d classified, %d from cache, %d items",
                      ai_result.classified, ai_result.from_cache,
                      len(ai_result.items))
+
+    # Every run feeds the day's activity into the digest buffer; the morning
+    # briefing drains it — this is how the digest sees the whole day even
+    # though hourly urgent scans consume the events as they arrive.
+    digest_buffer = DigestBuffer(paths)
+    digest_buffer.append(fresh, now)
+    digest_result, digest_counts = _build_digest(
+        command, config, digest_buffer, ai_client, now)
 
     store = AttentionStore(paths)
     store.merge(candidates, activities, now)
@@ -140,6 +149,8 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
             [i for i in items if i.score >= threshold],
             reviewed_count=reviewed + sum(1 for i in items if i.score < threshold),
             config=config, now=now, degraded=degraded,
+            digest=digest_result, digest_counts=digest_counts,
+            digest_hours=config.briefing.digest.hours,
         )
         reported = [i.key for i in items if i.score >= threshold]
 
@@ -157,6 +168,9 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
         recent.save()
         if ai_cache is not None:
             ai_cache.save()
+        if command == "briefing" and (digest_result or digest_counts):
+            digest_buffer.drain()  # this morning's digest consumed the day
+        digest_buffer.save()
         for name, state in new_states.items():
             atomic_write_json(paths.state / f"{name}.json", state)
 
@@ -178,6 +192,29 @@ def _deliver(text: str, config: AppConfig) -> bool | None:
         log.error("%s", exc)
         return False
     return True
+
+
+def _build_digest(command: str, config: AppConfig, buffer: DigestBuffer,
+                  ai_client, now: datetime):
+    """(DigestResult | None, counts | None) for the morning briefing."""
+    cfg = config.briefing.digest
+    if command != "briefing" or not cfg.enabled:
+        return None, None
+    entries = buffer.entries_since(now, cfg.hours, cfg.max_items)
+    if not entries:
+        return None, None
+    counts = buffer.counts_by_source(now, cfg.hours)
+    if ai_client is None:
+        return None, counts  # counts-only fallback line
+
+    from app.ai.client import AIError
+
+    for attempt in (1, 2):
+        try:
+            return ai_client.summarise_digest(entries), counts
+        except AIError as exc:
+            log.warning("digest attempt %d failed: %s", attempt, exc)
+    return None, counts
 
 
 def _ai_available() -> bool:

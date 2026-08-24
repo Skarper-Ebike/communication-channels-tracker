@@ -6,6 +6,12 @@ Basecamp 2 — with **your own credentials**, has Claude judge what actually
 needs you, and posts one short briefing to **your own private Slack channel**:
 what needs you, what you missed, who's waiting on you, what can be ignored.
 
+The morning briefing also carries a **TEAM DIGEST** — a summary of everything
+that happened across your connected sources in the last day, whether you were
+involved or not: key notes, decisions made, and issues the team faced. Its
+breadth is exactly your own visibility: the Slack channels you monitor, the
+Jira projects you watch, the Basecamp events your account can see.
+
 There is no backend, no shared server, no database, no central account system,
 no dashboard. Each clone of this repository represents exactly one person.
 Everything personal lives in `.local/` (gitignored, never leaves your machine).
@@ -171,7 +177,8 @@ data in an isolated sandbox (`.local/mock/`) and never posts anywhere.
 ├── config.yaml        non-secret config (URLs, channels, thresholds, times)
 ├── .env               tokens & keys you typed in (chmod 600)
 ├── secrets/           OAuth tokens: google-token.json, basecamp-token.json (600)
-├── state/             per-connector cursors (what's already been seen)
+├── state/             per-connector cursors + digest-buffer.json (rolling
+│                      48h of truncated excerpts feeding the team digest)
 ├── attention/         open / snoozed / resolved items (plain JSON)
 ├── cache/             Claude classification cache (30-day expiry)
 └── logs/              run logs (no tokens, no webhook URLs, ever)
