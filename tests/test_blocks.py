@@ -28,6 +28,8 @@ def texts(blocks):
             out.append(b["text"]["text"])
         for el in b.get("elements", []):
             out.append(el["text"])
+        for f in b.get("fields", []):
+            out.append(f["text"])
     return "\n".join(out)
 
 
@@ -43,11 +45,16 @@ def test_morning_blocks_structure_and_links():
            "Checkout &lt;fix&gt; &amp; retest>" in body
     assert "🔴 Needs you" in body
     assert "🟠 Worth knowing" in body
-    assert "_Assigned to you and 2 days overdue._" in body
-    # Footer context carries the counts.
-    context = [b for b in blocks if b["type"] == "context"]
-    assert any("Reviewed 6 other activities" in el["text"]
-               for b in context for el in b["elements"])
+    # Key phrases auto-bolded in deterministic text.
+    assert "_Assigned to you and *2 days overdue*._" in body
+    assert "*Lucy* mentioned you directly." in body
+    # Category emoji on items.
+    assert "⏰" in body and "💬" in body
+    # Footer is a fields grid ("table") with the counts.
+    fields_blocks = [b for b in blocks if b.get("fields")]
+    assert fields_blocks, "expected an At a glance fields section"
+    assert "📌 At a glance" in fields_blocks[-1]["text"]["text"]
+    assert "6 other activities" in texts(fields_blocks)
 
 
 def test_morning_blocks_digest_and_degraded():
@@ -60,8 +67,8 @@ def test_morning_blocks_digest_and_degraded():
     body = texts(blocks)
     assert "🧭 Team digest — last 24h" in body
     assert "Busy ESC day." in body
-    assert "*Decisions*" in body and "proceed" in body
-    assert "Issues" not in body  # empty lists render nothing
+    assert "*Decisions*" in body and "✅ Luv: proceed" in body
+    assert "*Issues*" not in body  # empty lists render nothing
     assert "⚠️ Google Drive could not be checked" in body
 
 

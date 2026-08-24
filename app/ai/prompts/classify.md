@@ -36,7 +36,9 @@ RULES
    today. A quiet agent is better than a noisy one — when in doubt, mark
    FYI or NOISE with `relevant: false`.
 5. `summary` is one short sentence a busy person reads in two seconds.
-   `reason` states the evidence from the content.
+   `reason` states the evidence from the content. In both, wrap the single
+   most important phrase — who, what, or by when — in *single asterisks*
+   (Slack bold). One bolded phrase each, never double asterisks.
 6. If several activities describe the same underlying issue, classify each,
    but give the clearest one the highest importance and note the duplication
    in `reason`.

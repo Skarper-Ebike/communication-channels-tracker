@@ -28,3 +28,7 @@ RULES
 4. Omission is the value: skip routine chatter, bot noise, and trivia.
    Empty lists are fine — do not pad.
 5. Order bullets by importance to someone running this team's work.
+6. In every bullet and in the overview, wrap the single most important
+   phrase — the decision itself, the person, or the deadline — in *single
+   asterisks* (Slack bold). One bolded phrase per bullet, never more, and
+   never double asterisks.
