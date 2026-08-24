@@ -21,7 +21,7 @@ from app.config import AppConfig, load_config
 from app.connectors.mock import MockConnector
 from app.digest import DigestBuffer
 from app.lock import RunLock
-from app.output import renderer
+from app.output import blocks, renderer
 from app.storage import LocalPaths, atomic_write_json, read_json
 
 log = logging.getLogger("work-agent")
@@ -131,13 +131,17 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
     reviewed = len(fresh) - len({c.object_id for c in candidates})
     reviewed = max(0, reviewed)
 
+    slack_blocks = None
     if command == "urgent":
         text = renderer.render_urgent(items, config, now)
         reported = [i.key for i in items
                     if i.score >= config.attention.urgent_threshold]
+        if reported:
+            slack_blocks = blocks.urgent_blocks(items, config, now)
     elif command == "weekly":
         text = renderer.render_weekly(items, now)
         reported = [i.key for i in items]
+        slack_blocks = blocks.weekly_blocks(items, now, text)
     elif command == "sync":
         text = (f"Synced {len(connectors) - len(degraded)}/{len(connectors)} "
                 f"sources: {len(activities)} activities, {len(fresh)} new, "
@@ -145,20 +149,22 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
         reported = []
     else:  # morning briefing
         threshold = config.attention.morning_threshold
-        text = renderer.render_morning(
-            [i for i in items if i.score >= threshold],
-            reviewed_count=reviewed + sum(1 for i in items if i.score < threshold),
-            config=config, now=now, degraded=degraded,
-            digest=digest_result, digest_counts=digest_counts,
-            digest_hours=config.briefing.digest.hours,
-        )
+        shown = [i for i in items if i.score >= threshold]
+        shown_reviewed = reviewed + sum(1 for i in items if i.score < threshold)
+        common = dict(config=config, now=now, degraded=degraded,
+                      digest=digest_result, digest_counts=digest_counts,
+                      digest_hours=config.briefing.digest.hours)
+        text = renderer.render_morning(shown, reviewed_count=shown_reviewed,
+                                       **common)
+        slack_blocks = blocks.morning_blocks(shown, reviewed_count=shown_reviewed,
+                                             **common)
         reported = [i.key for i in items if i.score >= threshold]
 
     delivered = None
     if not dry_run and not mock and command in ("briefing", "urgent", "weekly"):
         # Urgent stays quiet unless something actually crossed the threshold.
         if command != "urgent" or reported:
-            delivered = _deliver(text, config)
+            delivered = _deliver(text, config, slack_blocks)
 
     if not dry_run:
         store.mark_reported(reported, now)
@@ -181,13 +187,16 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
                      delivered=delivered)
 
 
-def _deliver(text: str, config: AppConfig) -> bool | None:
+def _deliver(text: str, config: AppConfig,
+             slack_blocks: list[dict] | None = None) -> bool | None:
     from app.output import slack
 
     if slack.webhook_url(config) is None:
         return None
+    # With blocks, the text field is just the notification preview line.
+    fallback = text.splitlines()[0] if slack_blocks else text
     try:
-        slack.post_message(text, config)
+        slack.post_message(fallback, config, blocks=slack_blocks)
     except slack.SlackDeliveryError as exc:
         log.error("%s", exc)
         return False

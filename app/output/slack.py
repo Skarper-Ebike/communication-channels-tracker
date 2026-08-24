@@ -30,13 +30,22 @@ def webhook_url(config: AppConfig) -> str | None:
 
 
 def post_message(text: str, config: AppConfig,
-                 client: httpx.Client | None = None) -> None:
-    """Post `text` to the user's private channel. Raises SlackDeliveryError."""
+                 client: httpx.Client | None = None,
+                 blocks: list[dict] | None = None) -> None:
+    """Post to the user's private channel. Raises SlackDeliveryError.
+
+    With `blocks`, Slack renders the Block Kit layout and `text` becomes the
+    notification fallback line.
+    """
     url = webhook_url(config)
     if not url:
         raise SlackDeliveryError(
             f"no webhook configured (set {config.slack_output.webhook_env} "
             f"in .local/.env)")
+
+    payload: dict = {"text": text}
+    if blocks:
+        payload["blocks"] = blocks
 
     own_client = client is None
     client = client or httpx.Client(timeout=TIMEOUT_SECONDS)
@@ -45,7 +54,7 @@ def post_message(text: str, config: AppConfig,
         for attempt in range(1, MAX_ATTEMPTS + 1):
             response = None
             try:
-                response = client.post(url, json={"text": text})
+                response = client.post(url, json=payload)
             except httpx.HTTPError as exc:
                 last_error = f"network error: {type(exc).__name__}"
             else:
