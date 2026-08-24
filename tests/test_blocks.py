@@ -59,6 +59,7 @@ def test_morning_blocks_structure_and_links():
 
 def test_morning_blocks_digest_and_degraded():
     digest = DigestResult(overview="Busy ESC day.",
+                          team=["*Jess* — ESC debugging (Jira)."],
                           decisions=["Luv: proceed (CP1R-47)."],
                           issues=[], notes=[])
     blocks = morning_blocks([], reviewed_count=0, config=AppConfig(), now=NOW,
@@ -67,6 +68,8 @@ def test_morning_blocks_digest_and_degraded():
     body = texts(blocks)
     assert "🧭 Team digest — last 24h" in body
     assert "Busy ESC day." in body
+    assert "👥 Team — who's on what" in body
+    assert "👤 *Jess* — ESC debugging (Jira)." in body
     assert "*Decisions*" in body and "✅ Luv: proceed" in body
     assert "*Issues*" not in body  # empty lists render nothing
     assert "⚠️ Google Drive could not be checked" in body

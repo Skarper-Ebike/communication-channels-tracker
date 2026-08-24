@@ -15,9 +15,15 @@ Only summarise the supplied workplace activity.
 OUTPUT
 
 - overview: 2–3 sentences on what the team's day was about. Plain, factual.
+- team: what each person is working on, one entry per person, most active
+  first. Merge everything a person did across all platforms into one line:
+  "*Luv* — Battery Splitter Stage 2 spec; chasing vendor thermal validation
+  (Confluence, Jira)". Only people who actually appear in the records, at
+  most 12; describe the work, not a list of events.
 - decisions: explicit decisions that were made. One bullet each.
 - issues: problems, blockers, failures, or incidents the team faced.
 - notes: other key updates worth knowing (progress, changes, announcements).
+  Do not repeat what the team entries already say.
 
 RULES
 
@@ -31,4 +37,4 @@ RULES
 6. In every bullet and in the overview, wrap the single most important
    phrase — the decision itself, the person, or the deadline — in *single
    asterisks* (Slack bold). One bolded phrase per bullet, never more, and
-   never double asterisks.
+   never double asterisks. In team entries, bold the person's name.

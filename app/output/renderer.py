@@ -127,7 +127,8 @@ def _digest_lines(digest, counts: dict[str, int] | None,
     lines = [f"🧭 TEAM DIGEST — last {hours}h", ""]
     if digest is not None:
         lines.append(digest.overview)
-        for header, entries in (("DECISIONS", digest.decisions),
+        for header, entries in (("TEAM", getattr(digest, "team", [])),
+                                ("DECISIONS", digest.decisions),
                                 ("ISSUES", digest.issues),
                                 ("NOTES", digest.notes)):
             if entries:

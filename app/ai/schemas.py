@@ -43,6 +43,9 @@ class DigestResult(BaseModel):
     """Team-day summary: everything that happened, involved or not."""
 
     overview: str
+    # One line per active person: what they appear to be working on across
+    # all connected platforms.
+    team: list[str] = Field(default_factory=list)
     decisions: list[str]
     issues: list[str]
     notes: list[str]

@@ -63,6 +63,7 @@ def test_counts_by_source(paths):
 def test_morning_briefing_renders_digest_section():
     digest = DigestResult(
         overview="The team spent the day debugging the new ESC current issue.",
+        team=["*Jess* — ESC current debugging, 90A bench tests (Jira, Slack)."],
         decisions=["Luv: treat the failed unit as failed so other testing "
                    "continues (CP1R-47)."],
         issues=["Bench PSU browned out during 90A test (Jess, CP1R-47)."],
@@ -73,6 +74,7 @@ def test_morning_briefing_renders_digest_section():
                           digest_hours=24)
     assert "🧭 TEAM DIGEST — last 24h" in text
     assert "debugging the new ESC" in text
+    assert "TEAM" in text and "ESC current debugging" in text
     assert "DECISIONS" in text and "treat the failed unit" in text
     assert "ISSUES" in text and "browned out" in text
     assert "NOTES" in text and "VESC tool share" in text

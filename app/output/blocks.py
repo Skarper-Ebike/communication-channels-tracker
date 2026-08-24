@@ -27,6 +27,7 @@ from app.output.renderer import (
 MAX_NEEDS_YOU = 10
 MAX_WORTH_KNOWING = 15
 MAX_DIGEST_BULLETS = 8
+MAX_TEAM_MEMBERS = 12
 SECTION_LIMIT = 2900
 
 CATEGORY_EMOJI = {
@@ -140,6 +141,11 @@ def _digest_blocks(digest, counts: dict[str, int] | None,
     if digest is not None:
         blocks.append(_section(f"*🧭 Team digest — last {hours}h*\n"
                                f"{_esc(digest.overview)}"))
+        team = getattr(digest, "team", [])
+        if team:
+            bullets = "\n".join(f"👤 {_esc(entry)}"
+                                for entry in team[:MAX_TEAM_MEMBERS])
+            blocks.append(_section(f"*👥 Team — who's on what*\n{bullets}"))
         for marker, label, entries in (("✅", "Decisions", digest.decisions),
                                        ("⚠️", "Issues", digest.issues),
                                        ("📝", "Notes", digest.notes)):
