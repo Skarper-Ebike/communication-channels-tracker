@@ -21,6 +21,7 @@ from app.config import AppConfig, load_config
 from app.connectors.mock import MockConnector
 from app.digest import DigestBuffer
 from app.lock import RunLock
+from app.models import Source
 from app.output import blocks, renderer
 from app.storage import LocalPaths, atomic_write_json, read_json
 
@@ -65,10 +66,14 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
     new_states: dict[str, dict] = {}
     degraded: list[str] = []
 
+    # Loaded before polling so connectors can re-read the objects behind open
+    # date items; nothing is written until the run has succeeded.
+    store = AttentionStore(paths)
+
     if mock:
         connectors = [MockConnector(now=now)]
     else:
-        connectors = _live_connectors(config, degraded, now)
+        connectors = _live_connectors(config, degraded, now, store)
     for connector in connectors:
         state_path = paths.state / f"{connector.name}.json"
         state = read_json(state_path, {"version": 1})
@@ -121,8 +126,12 @@ def _run_locked(command: str, config: AppConfig, paths: LocalPaths,
     digest_result, digest_counts = _build_digest(
         command, config, digest_buffer, ai_client, now)
 
-    store = AttentionStore(paths)
-    store.merge(candidates, activities, now)
+    # Snapshots restate each object's due date on every run, so date items
+    # follow a due date that passes or moves even when dedupe saw the event.
+    known = {c.key for c in candidates}
+    current = [c for c in rules.evaluate_dates(activities, now)
+               if c.key not in known]
+    store.merge(candidates + current, activities, now)
 
     items = store.reportable(now)
     for item in items:
@@ -232,7 +241,7 @@ def _ai_available() -> bool:
 
 
 def _live_connectors(config: AppConfig, degraded: list[str],
-                     now: datetime) -> list:
+                     now: datetime, store: AttentionStore) -> list:
     connectors = []
     if config.connectors.jira.enabled:
         from app.connectors.jira import JiraConnector
@@ -240,8 +249,9 @@ def _live_connectors(config: AppConfig, degraded: list[str],
         email = os.environ.get("JIRA_EMAIL")
         token = os.environ.get("JIRA_API_TOKEN")
         if email and token and config.connectors.jira.base_url:
-            connectors.append(
-                JiraConnector(config.connectors.jira, email, token, now=now))
+            connectors.append(JiraConnector(
+                config.connectors.jira, email, token, now=now,
+                refresh_keys=store.date_object_ids(Source.JIRA)))
         else:
             log.error("jira enabled but JIRA_EMAIL/JIRA_API_TOKEN/base_url "
                       "incomplete")

@@ -179,3 +179,122 @@ def test_adf_flattening():
     assert adf_to_text(doc) == "Hello @Sam\nBye\n"
     assert adf_mentions(doc, "x") is True
     assert adf_mentions(doc, "y") is False
+
+
+# -- re-reading issues behind open date items --------------------------------
+
+CURSOR_STATE = {"account_id": ME, "display_name": "Jakub",
+                "last_updated_at": "2026-08-21T07:00:00.000+0000",
+                "assigned_keys": ["CRX-281", "CRX-333"],
+                "seen_issue_versions": {
+                    "CRX-281": "2026-08-12T10:00:00.000+0000",
+                    "CRX-333": "2026-08-01T10:00:00.000+0000"}}
+
+
+def routed_connector(*, incremental=(), by_key=None, missing=(),
+                     reject_batches=False, refresh_keys=(), requests_log=None):
+    """Incremental JQL serves `incremental`; `key in (...)` serves by_key."""
+    by_key = by_key or {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if requests_log is not None:
+            requests_log.append(request)
+        path = request.url.path
+        if path.endswith("/myself"):
+            return httpx.Response(200, json=MYSELF)
+        if path.endswith("/search/jql"):
+            jql = request.url.params["jql"]
+            if not jql.startswith("key in"):
+                return httpx.Response(200, json={"issues": list(incremental)})
+            if reject_batches and missing:
+                error = (f"An issue with key '{missing[0]}' does not exist "
+                         "for field 'key'.")
+                return httpx.Response(400, json={"errorMessages": [error]})
+            wanted = [k for k in by_key if f'"{k}"' in jql]
+            return httpx.Response(200, json={
+                "issues": [by_key[k] for k in wanted]})
+        if "/rest/api/3/issue/" in path:
+            key = path.rsplit("/", 1)[-1]
+            if key in by_key:
+                return httpx.Response(200, json=by_key[key])
+            return httpx.Response(404)
+        return httpx.Response(404)
+
+    client = httpx.Client(base_url="https://example.atlassian.net",
+                          transport=httpx.MockTransport(handler))
+    cfg = JiraConnectorConfig(enabled=True,
+                              base_url="https://example.atlassian.net")
+    return JiraConnector(cfg, "jakub@example.com", "token", client=client,
+                         now=NOW, refresh_keys=refresh_keys)
+
+
+def test_open_date_keys_refetched_even_when_not_updated_since_cursor():
+    log = []
+    moved = issue("CRX-281", summary="QA (no-lock) EVT Design",
+                  updated="2026-08-12T10:00:00.000+0000",
+                  duedate="2026-12-05")
+    c = routed_connector(by_key={"CRX-281": moved},
+                         refresh_keys=["CRX-281"], requests_log=log)
+    result = c.fetch_changes(CURSOR_STATE)
+
+    [a] = result.activities
+    assert a.object_id == "CRX-281"
+    assert a.snapshot is True
+    assert a.assigned_to_user is True
+    assert a.title == "QA (no-lock) EVT Design"
+    assert a.due_at.date().isoformat() == "2026-12-05"
+    # A current-state read only: cursor and bookkeeping are untouched.
+    assert result.state["last_updated_at"] == CURSOR_STATE["last_updated_at"]
+    assert result.state["seen_issue_versions"] == \
+        CURSOR_STATE["seen_issue_versions"]
+    assert result.state["assigned_keys"] == CURSOR_STATE["assigned_keys"]
+
+    refresh = [r for r in log if r.url.path.endswith("/search/jql")
+               and r.url.params["jql"].startswith("key in")]
+    assert [r.url.params["jql"] for r in refresh] == ['key in ("CRX-281")']
+    assert refresh[0].url.params["maxResults"] == "100"
+    assert refresh[0].url.params["fields"] == \
+        "summary,assignee,duedate,priority,status,issuetype,created,updated,comment"
+
+
+def test_refetched_issue_never_emits_assignment_event():
+    c = routed_connector(by_key={"CRX-9": issue("CRX-9", duedate="2026-08-01")},
+                         refresh_keys=["CRX-9"])
+    state = dict(CURSOR_STATE, assigned_keys=[])
+    events = {a.event_type for a in c.fetch_changes(state).activities}
+    assert events == {"issue_updated"}
+
+
+def test_key_already_in_incremental_pass_is_not_refetched():
+    log = []
+    fresh = issue("CRX-333", updated="2026-08-21T07:30:00.000+0000",
+                  duedate="2026-08-11")
+    c = routed_connector(incremental=[fresh], refresh_keys=["CRX-333"],
+                         requests_log=log)
+    result = c.fetch_changes(CURSOR_STATE)
+    assert [a.object_id for a in result.activities] == ["CRX-333"]
+    assert not any(r.url.params.get("jql", "").startswith("key in")
+                   for r in log)
+
+
+def test_refresh_keys_batched_at_100():
+    log = []
+    keys = [f"CRX-{n}" for n in range(1, 151)]
+    c = routed_connector(refresh_keys=keys, requests_log=log)
+    c.fetch_changes(CURSOR_STATE)
+    batches = [r.url.params["jql"] for r in log
+               if r.url.params.get("jql", "").startswith("key in")]
+    assert len(batches) == 2
+    assert batches[0].count('"CRX-') == 100
+    assert batches[1].count('"CRX-') == 50
+
+
+def test_deleted_key_falls_back_to_per_issue_reads():
+    # JQL rejects a whole `key in` batch over one deleted key; the others
+    # must still refresh rather than the connector failing every run.
+    alive = issue("CRX-333", duedate="2026-12-05")
+    c = routed_connector(by_key={"CRX-333": alive}, missing=["CRX-404"],
+                         reject_batches=True,
+                         refresh_keys=["CRX-333", "CRX-404"])
+    result = c.fetch_changes(CURSOR_STATE)
+    assert [a.object_id for a in result.activities] == ["CRX-333"]

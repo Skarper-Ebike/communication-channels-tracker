@@ -4,6 +4,12 @@ Polls by issue `updated` timestamp (§37) — never refetches whole projects.
 Deterministic facts (assignee, due date, status, new assignment) come straight
 from the API; comment text goes on to the AI pass like any other activity.
 
+Issues behind open date items (`refresh_keys`, from the runner) are re-read
+every run as well: a due date can move, or the issue be reassigned, while
+the overdue item it backs was raised before the cursor. That read is a
+current-state snapshot only; it never touches the cursor or the bookkeeping
+below, so the incremental pass still sees every real change.
+
 State (all local, cursor advanced only after the run succeeds):
   last_updated_at       ISO cursor for incremental JQL
   seen_issue_versions   {key: updated} to skip unchanged issues
@@ -15,6 +21,7 @@ State (all local, cursor advanced only after the run succeeds):
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -38,6 +45,7 @@ MAX_PAGES = 20
 INITIAL_LOOKBACK_DAYS = 7
 CURSOR_OVERLAP_MINUTES = 5
 MAX_SEEN_VERSIONS = 500
+REFRESH_BATCH = 100
 
 FIELDS = "summary,assignee,duedate,priority,status,issuetype,created,updated,comment"
 
@@ -49,10 +57,12 @@ class JiraConnector:
 
     def __init__(self, config: JiraConnectorConfig, email: str, token: str,
                  client: httpx.Client | None = None,
-                 now: datetime | None = None):
+                 now: datetime | None = None,
+                 refresh_keys: Iterable[str] = ()):
         self.config = config
         self.base_url = config.base_url.rstrip("/")
         self.now = now or datetime.now(timezone.utc)
+        self.refresh_keys = sorted(set(refresh_keys))
         self._client = client or httpx.Client(
             base_url=self.base_url, auth=(email, token), timeout=20,
             headers={"Accept": "application/json"},
@@ -90,12 +100,14 @@ class JiraConnector:
 
         activities: list[Activity] = []
         max_updated = cursor
+        emitted: set[str] = set()
         for issue in issues:
             key = issue["key"]
             fields = issue.get("fields", {})
             updated = fields.get("updated", "")
             if seen_versions.get(key) == updated:
                 continue
+            emitted.add(key)
             seen_versions[key] = updated
             if max_updated is None or updated > max_updated:
                 max_updated = updated
@@ -111,6 +123,17 @@ class JiraConnector:
             activities.extend(self._issue_activities(
                 key, fields, assigned=assigned, newly_assigned=newly_assigned,
                 account_id=account_id, comment_floor=comment_floor,
+            ))
+
+        stale = [k for k in self.refresh_keys if k not in emitted]
+        for issue in self._current_issues(stale):
+            fields = issue.get("fields", {})
+            assignee = fields.get("assignee") or {}
+            activities.extend(self._issue_activities(
+                issue["key"], fields,
+                assigned=assignee.get("accountId") == account_id,
+                newly_assigned=False, account_id=account_id,
+                comment_floor=comment_floor,
             ))
 
         state["seen_issue_versions"] = dict(
@@ -143,12 +166,12 @@ class JiraConnector:
         stamp = overlap.strftime("%Y-%m-%d %H:%M")
         return f'updated >= "{stamp}" AND {scope} ORDER BY updated ASC'
 
-    def _search(self, jql: str) -> list[dict]:
+    def _search(self, jql: str, page_size: int = PAGE_SIZE) -> list[dict]:
         issues: list[dict] = []
         next_page_token: str | None = None
         for _ in range(MAX_PAGES):
             params: dict[str, Any] = {
-                "jql": jql, "fields": FIELDS, "maxResults": PAGE_SIZE,
+                "jql": jql, "fields": FIELDS, "maxResults": page_size,
             }
             if next_page_token:
                 params["nextPageToken"] = next_page_token
@@ -160,6 +183,35 @@ class JiraConnector:
                 return issues
         log.warning("jira: stopped after %d pages; remaining changes are "
                     "picked up next run", MAX_PAGES)
+        return issues
+
+    def _current_issues(self, keys: list[str]) -> list[dict]:
+        issues: list[dict] = []
+        for start in range(0, len(keys), REFRESH_BATCH):
+            batch = keys[start:start + REFRESH_BATCH]
+            jql = "key in ({})".format(", ".join(f'"{k}"' for k in batch))
+            try:
+                issues.extend(self._search(jql, page_size=REFRESH_BATCH))
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 400:
+                    raise
+                # JQL rejects the whole query if one key no longer exists, so
+                # read this batch one issue at a time and skip the missing.
+                issues.extend(self._issues_one_by_one(batch))
+        return issues
+
+    def _issues_one_by_one(self, keys: list[str]) -> list[dict]:
+        issues: list[dict] = []
+        for key in keys:
+            try:
+                issues.append(get_with_retry(
+                    self._client, f"/rest/api/3/issue/{key}",
+                    params={"fields": FIELDS}).json())
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 404:
+                    raise
+                log.warning("jira: %s is deleted or no longer visible; its "
+                            "open item cannot be refreshed", key)
         return issues
 
     def _issue_activities(self, key: str, fields: dict, *, assigned: bool,
@@ -176,6 +228,7 @@ class JiraConnector:
             due_at=_parse_due(fields.get("duedate")),
             completed=completed,
             priority=priority.lower() if priority else None,
+            snapshot=True,
         )
 
         activities = [Activity(

@@ -81,6 +81,12 @@ class Activity(BaseModel):
 
     priority: str | None = None
 
+    # Read from the object's current state (not an event about it), so
+    # assigned_to_user and due_at are authoritative as of this run. Event-feed
+    # activities stay False: they can share an object_id without carrying the
+    # object's due date.
+    snapshot: bool = False
+
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

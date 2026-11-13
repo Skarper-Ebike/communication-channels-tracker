@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from app.models import Activity, AttentionItem, AttentionStatus
+from app.attention import rules
+from app.models import Activity, AttentionItem, AttentionStatus, Source
 from app.storage import LocalPaths, atomic_write_json, read_json
 
 RESOLVED_RETENTION_DAYS = 30
@@ -49,8 +50,19 @@ class AttentionStore:
                 # genuinely new occurrence — fresh item, fresh first_seen.
                 self.open[candidate.key] = candidate
 
+        self._track_dates(activities, now)
         self._resolve_completed(activities, now)
         self._prune_resolved(now)
+
+    def date_object_ids(self, source: Source) -> list[str]:
+        """Objects behind open or snoozed date items, for the connector to
+        re-read each run: their due date can move without a new event."""
+        return sorted({
+            item.object_id
+            for pool in (self.open, self.snoozed)
+            for item in pool.values()
+            if item.source is source and item.category in rules.DATE_CATEGORIES
+        })
 
     def reportable(self, now: datetime) -> list[AttentionItem]:
         return [i for i in self.open.values() if i.status is AttentionStatus.OPEN]
@@ -99,6 +111,37 @@ class AttentionStore:
                 item.status = AttentionStatus.OPEN
                 item.snoozed_until = None
                 self.open[key] = self.snoozed.pop(key)
+
+    def _track_dates(self, activities: list[Activity], now: datetime) -> None:
+        """Keep OVERDUE / DUE_SOON items true to the source's current state.
+
+        A snapshot activity states the object's assignee and due date as they
+        are now, so a date item whose object no longer yields its category
+        (due date moved, unassigned, left the window) is resolved, and the
+        rest take the snapshot's due date and title. Every remaining date item
+        then gets its reason recomputed, so it says what the meta line says.
+        """
+        current: dict[tuple[Source, str], Activity] = {}
+        for a in activities:
+            if a.snapshot:
+                current[(a.source, a.object_id)] = a
+        for pool in (self.open, self.snoozed):
+            for key in list(pool):
+                item = pool[key]
+                if item.category not in rules.DATE_CATEGORIES:
+                    continue
+                snap = current.get((item.source, item.object_id))
+                if snap is not None:
+                    if rules.date_category(snap, now) is not item.category:
+                        item.status = AttentionStatus.RESOLVED
+                        item.resolved_at = now
+                        self.resolved[key] = pool.pop(key)
+                        continue
+                    item.due_at = snap.due_at
+                    if snap.title:
+                        item.title = snap.title
+                if item.due_at is not None:
+                    item.reason = rules.date_reason(item.due_at, now)
 
     def _resolve_completed(self, activities: list[Activity], now: datetime) -> None:
         completed = {(a.source, a.object_id) for a in activities if a.completed is True}

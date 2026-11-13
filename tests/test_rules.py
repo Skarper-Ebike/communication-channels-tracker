@@ -66,3 +66,25 @@ def test_same_object_twice_yields_one_item_per_category():
     a2 = make_activity(id="jira:ACME-1:updated:2", assigned_to_user=True,
                        due_at=NOW - timedelta(days=1))
     assert len(rules.evaluate([a1, a2], NOW)) == 1
+
+
+def test_date_reason_wording_matches_candidates():
+    assert rules.date_reason(NOW - timedelta(days=12), NOW) == \
+        "Assigned to you and 12 days overdue."
+    assert rules.date_reason(NOW - timedelta(hours=3), NOW) == \
+        "Assigned to you and 1 day overdue."
+    assert rules.date_reason(NOW + timedelta(hours=20), NOW) == \
+        "Assigned to you and due in 20 hours."
+    assert rules.date_reason(NOW + timedelta(hours=60), NOW) == \
+        "Assigned to you and due in 2 days."
+
+
+def test_evaluate_dates_only_reads_snapshots():
+    due = NOW - timedelta(days=2)
+    snap = make_activity(snapshot=True, assigned_to_user=True, due_at=due,
+                         mentions_user=True)
+    event = make_activity(object_id="ACME-2", assigned_to_user=True, due_at=due)
+    items = rules.evaluate_dates([snap, event], NOW)
+    # Date categories only: a mention is news once, not on every re-read.
+    assert [(i.object_id, i.category) for i in items] == \
+        [("ACME-1", AttentionCategory.OVERDUE)]

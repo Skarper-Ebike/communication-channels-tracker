@@ -161,6 +161,7 @@ class BasecampConnector:
             assigned_to_user=True,  # by definition of the endpoint
             due_at=_parse_due(todo.get("due_at") or todo.get("due_on")),
             completed=bool(todo.get("completed")),
+            snapshot=True,  # assigned_todos is the full current set each run
         )
 
     def _events(self, base: str, floor: datetime):

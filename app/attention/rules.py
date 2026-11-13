@@ -12,6 +12,8 @@ from app.models import Activity, AttentionCategory, AttentionItem, attention_key
 
 DUE_SOON_WINDOW = timedelta(hours=72)
 
+DATE_CATEGORIES = frozenset({AttentionCategory.OVERDUE, AttentionCategory.DUE_SOON})
+
 
 def evaluate(activities: list[Activity], now: datetime) -> list[AttentionItem]:
     """One AttentionItem per (source, object, category), deterministic only."""
@@ -22,23 +24,54 @@ def evaluate(activities: list[Activity], now: datetime) -> list[AttentionItem]:
     return list(items.values())
 
 
+def evaluate_dates(activities: list[Activity], now: datetime) -> list[AttentionItem]:
+    """OVERDUE / DUE_SOON for every snapshot activity, already seen or not.
+
+    Dedupe keeps an unchanged object's activity out of `evaluate`, but a due
+    date passes without any new event. A snapshot states the current due date,
+    so its date category is decided afresh on every run.
+    """
+    items: dict[str, AttentionItem] = {}
+    for a in activities:
+        if not a.snapshot:
+            continue
+        category = date_category(a, now)
+        if category is not None:
+            item = _item(a, category, now, reason=date_reason(a.due_at, now))
+            items.setdefault(item.key, item)
+    return list(items.values())
+
+
+def date_category(a: Activity, now: datetime) -> AttentionCategory | None:
+    if a.completed is True or not a.assigned_to_user:
+        return None
+    due = _aware(a.due_at)
+    if due is None:
+        return None
+    if due < now:
+        return AttentionCategory.OVERDUE
+    if due < now + DUE_SOON_WINDOW:
+        return AttentionCategory.DUE_SOON
+    return None
+
+
+def date_reason(due: datetime, now: datetime) -> str:
+    due = _aware(due)
+    if due < now:
+        days = max(1, (now - due).days)
+        return f"Assigned to you and {days} day{'s' if days != 1 else ''} overdue."
+    hours = int((due - now).total_seconds() // 3600)
+    when = f"in {hours} hours" if hours < 48 else f"in {hours // 24} days"
+    return f"Assigned to you and due {when}."
+
+
 def _candidates(a: Activity, now: datetime):
     if a.completed is True:
         return
 
-    due = _aware(a.due_at)
-
-    if a.assigned_to_user and due is not None and due < now:
-        days = max(1, (now - due).days)
-        yield _item(
-            a, AttentionCategory.OVERDUE, now,
-            reason=f"Assigned to you and {days} day{'s' if days != 1 else ''} overdue.",
-        )
-    elif a.assigned_to_user and due is not None and due < now + DUE_SOON_WINDOW:
-        hours = int((due - now).total_seconds() // 3600)
-        when = f"in {hours} hours" if hours < 48 else f"in {hours // 24} days"
-        yield _item(a, AttentionCategory.DUE_SOON, now,
-                    reason=f"Assigned to you and due {when}.")
+    category = date_category(a, now)
+    if category is not None:
+        yield _item(a, category, now, reason=date_reason(a.due_at, now))
 
     if a.mentions_user:
         actor = a.actor_name or "Someone"

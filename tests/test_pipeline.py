@@ -2,11 +2,13 @@
 
 import subprocess
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 from app import runner
+from app.connectors.base import SyncResult
 from app.storage import LocalPaths
-from tests.conftest import NOW
+from tests.conftest import NOW, make_activity, make_item
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -119,3 +121,74 @@ def test_cli_without_mock_explains_and_exits_2(tmp_path):
     )
     assert proc.returncode == 2
     assert "--mock" in proc.stdout
+
+
+# -- date items through the real pipeline (dedupe included) ------------------
+
+class SnapshotConnector:
+    """Re-reads the same objects every run, as Jira refresh and Basecamp do."""
+
+    name = "snapshots"
+
+    def __init__(self, activities):
+        self.activities = activities
+
+    def fetch_changes(self, state):
+        return SyncResult(activities=self.activities, state=dict(state))
+
+
+def run_live(monkeypatch, paths, activities, now):
+    monkeypatch.setattr(runner, "_live_connectors",
+                        lambda config, degraded, now, store:
+                        [SnapshotConnector(activities)])
+    runner.run("sync", paths=paths, now=now, no_ai=True)
+    from app.attention.lifecycle import AttentionStore
+    return AttentionStore(paths)
+
+
+def test_unchanged_overdue_snapshot_stays_open_across_runs(paths, monkeypatch):
+    snap = make_activity(snapshot=True, assigned_to_user=True,
+                         due_at=NOW - timedelta(days=2))
+    run_live(monkeypatch, paths, [snap], NOW)
+    # Same activity id next run: dedupe drops it, the item must survive.
+    store = run_live(monkeypatch, paths, [snap], NOW + timedelta(days=1))
+    item = store.open["jira:ACME-1:overdue"]
+    assert item.reason == "Assigned to you and 3 days overdue."
+
+
+def test_moved_due_date_resolves_item_through_pipeline(paths, monkeypatch):
+    overdue = make_activity(snapshot=True, assigned_to_user=True,
+                            due_at=NOW - timedelta(days=2))
+    run_live(monkeypatch, paths, [overdue], NOW)
+    moved = make_activity(id="jira:ACME-1:updated:2", snapshot=True,
+                          assigned_to_user=True, title="Renamed",
+                          due_at=NOW + timedelta(days=30))
+    store = run_live(monkeypatch, paths, [moved], NOW + timedelta(hours=1))
+    assert "jira:ACME-1:overdue" not in store.open
+    assert "jira:ACME-1:overdue" in store.resolved
+
+
+def test_due_soon_becomes_overdue_without_new_event(paths, monkeypatch):
+    snap = make_activity(snapshot=True, assigned_to_user=True,
+                         due_at=NOW + timedelta(hours=20))
+    store = run_live(monkeypatch, paths, [snap], NOW)
+    assert "jira:ACME-1:due_soon" in store.open
+    store = run_live(monkeypatch, paths, [snap], NOW + timedelta(days=2))
+    assert "jira:ACME-1:due_soon" in store.resolved
+    assert store.open["jira:ACME-1:overdue"].reason == \
+        "Assigned to you and 1 day overdue."
+
+
+def test_runner_hands_open_date_keys_to_jira(paths, monkeypatch):
+    from app.attention.lifecycle import AttentionStore
+    from app.config import AppConfig
+
+    store = AttentionStore(paths)
+    store.merge([make_item(object_id="CRX-281", due_at=NOW)], [], NOW)
+    config = AppConfig()
+    config.connectors.jira.enabled = True
+    config.connectors.jira.base_url = "https://example.atlassian.net"
+    monkeypatch.setenv("JIRA_EMAIL", "jakub@example.com")
+    monkeypatch.setenv("JIRA_API_TOKEN", "token")
+    [jira] = runner._live_connectors(config, [], NOW, store)
+    assert jira.refresh_keys == ["CRX-281"]
